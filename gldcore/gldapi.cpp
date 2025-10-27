@@ -23,73 +23,50 @@
 namespace fs = std::filesystem;
 
 
-std::vector<std::string> split_path_x(const std::string& path, char sep){
-    std::vector<std::string> tokens;
-    std::size_t start = 0, end;
-    while ((end = path.find(sep, start)) != std::string::npos) {
-        tokens.push_back(path.substr(start, end - start));
-        start = end + 1;
-    }
-    tokens.push_back(path.substr(start));
-    return tokens;
-}
-
-
-fs::path
-findExecutable_x(const std::string &name, const std::string &execName, const std::string &pathString) {
-    fs::path execPath(execName);
-    if (execPath.is_absolute()) {
-        return execPath;
-    } else if (execPath.is_relative() && execName.front() == '.') {
-        return fs::absolute(execPath);
-    } else {
-        auto sys_path = pathString;
-        size_t pos;
-        std::string path_token;
-
-        auto check_exists = [](fs::path gldpath, fs::path gldpath_exe) {
-            if (fs::exists(gldpath)) {
-                return gldpath;
-            } else if (fs::exists(gldpath_exe)) {
-                return gldpath_exe;
-            }
-            return fs::path();
-        };
-
-        auto splitPath = split_path_x(sys_path, env_delim_char);
-
-        for(const auto& path : splitPath){
-            auto gldpath = fs::path(path) / name;
-            auto gldpath_exe = fs::path(path) / (name + ".exe");
-            auto check_path = check_exists(gldpath, gldpath_exe);
-            if (!check_path.empty()) {
-                return check_path;
-            }
-        }
-    }
-    throw std::runtime_error("Unable to determine GridLAB-D executable path");
-}
-
-
  // constructor
 GridLabD::GridLabD() {
     // Initialization code goes here
-        char *pd1, *pd2;
+    char *pd1, *pd2;
     int i, pos = 0;
 
-    std::string exec_name = "gridlabd";
-    global_gl_executable = findExecutable_x("gridlabd", exec_name, getenv("PATH"));
-    auto root_path = global_gl_executable.parent_path().parent_path();
-    global_gl_share = root_path / "share";
-    global_gl_include = root_path / "include";
-    global_gl_lib = root_path / "lib";
-    global_gl_bin = root_path / "bin";
-
-    global_gl_path = std::string((getenv("GLPATH") != nullptr ? std::string(getenv("GLPATH")) + env_delim : "") +
-                                 global_gl_lib.string() + env_delim +
-                                 global_gl_share.string() + env_delim +
-                                 global_gl_include.string() + env_delim +
-                                 global_gl_bin.string());
+    // For .so library usage, we rely on GLPATH environment variable or compile-time defaults
+    // instead of trying to locate an executable
+    char *glpath_env = getenv("GLPATH");
+    
+    if (glpath_env != nullptr) {
+        // Use user-provided GLPATH
+        global_gl_path = std::string(glpath_env);
+    } else {
+        // Use compile-time installation prefix as fallback
+        // These paths should be set during CMake configuration
+#ifdef CMAKE_INSTALL_PREFIX
+        fs::path install_prefix(CMAKE_INSTALL_PREFIX);
+        global_gl_share = install_prefix / "share" / "gridlabd";
+        global_gl_include = install_prefix / "include" / "gridlabd";
+        global_gl_lib = install_prefix / "lib" / "gridlabd";
+        global_gl_bin = install_prefix / "bin";
+        
+        global_gl_path = global_gl_lib.string() + env_delim +
+                         global_gl_share.string() + env_delim +
+                         global_gl_include.string() + env_delim +
+                         global_gl_bin.string();
+#else
+        // Last resort: use current working directory
+        char cwd[1024];
+        getcwd(cwd, sizeof(cwd));
+        fs::path current_path(cwd);
+        // Instantiate GridLabD via exectuable path
+        global_gl_share = "/mnt/c/dev/gridlab-d_fork/build/share";
+        global_gl_include = "/mnt/c/dev/gridlab-d_fork/build/headers";
+        global_gl_lib = "/mnt/c/dev/gridlab-d_fork/build/lib";
+        global_gl_bin = "/mnt/c/dev/gridlab-d_fork/build/bin";
+        
+        global_gl_path = global_gl_lib.string() + env_delim +
+                         global_gl_share.string() + env_delim +
+                         global_gl_include.string() + env_delim +
+                         global_gl_bin.string();
+#endif
+    }
 
     char *browser = getenv("GLBROWSER");
 
@@ -105,23 +82,6 @@ GridLabD::GridLabD() {
     /* specify the default browser */
     if (browser != nullptr)
         strncpy(global_browser, browser, sizeof(global_browser) - 1);
-
-#if defined WIN32 && _DEBUG
-    atexit(pause_at_exit);
-#endif
-
-#ifdef _WIN32
-    kill_starthandler();
-    atexit(kill_stophandler);
-#endif
-
-    /* capture the execdir */
-    strcpy(global_execname, exec_name.c_str());
-    strcpy(global_execdir, exec_name.c_str());
-    pd1 = strrchr(global_execdir, '/');
-    pd2 = strrchr(global_execdir, '\\');
-    if (pd1 > pd2) *pd1 = '\0';
-    else if (pd2 > pd1) *pd2 = '\0';
 
     /* determine current working directory */
     char *result = getcwd(global_workdir, 1024);
@@ -141,6 +101,30 @@ GridLabD::GridLabD() {
 // Set configuration file
 GLDErrorCode GridLabD::set_config_file(const std::string& config_file) {
     printf("Setting config file: %s\n", config_file.c_str());
+    return GLD_SUCCESS;
+}
+
+// Set GridLAB-D installation paths programmatically
+GLDErrorCode GridLabD::set_install_paths(const std::string& share_path,
+                                         const std::string& include_path,
+                                         const std::string& lib_path,
+                                         const std::string& bin_path) {
+    global_gl_share = fs::path(share_path);
+    global_gl_include = fs::path(include_path);
+    global_gl_lib = fs::path(lib_path);
+    global_gl_bin = fs::path(bin_path);
+    
+    global_gl_path = lib_path + env_delim +
+                     share_path + env_delim +
+                     include_path + env_delim +
+                     bin_path;
+    
+    printf("GridLAB-D paths set:\n");
+    printf("  Share: %s\n", share_path.c_str());
+    printf("  Include: %s\n", include_path.c_str());
+    printf("  Lib: %s\n", lib_path.c_str());
+    printf("  Bin: %s\n", bin_path.c_str());
+    
     return GLD_SUCCESS;
 }
 

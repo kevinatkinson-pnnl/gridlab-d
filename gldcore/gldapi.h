@@ -53,6 +53,13 @@ public:
     // Set the configuration file path
     GLDErrorCode set_config_file(const std::string& config_file);
 
+    // Set the GridLAB-D installation paths programmatically
+    // This is useful for Python bindings or when GLPATH environment variable is not set
+    GLDErrorCode set_install_paths(const std::string& share_path, 
+                                   const std::string& include_path,
+                                   const std::string& lib_path,
+                                   const std::string& bin_path);
+
 
     // Load a GLM and return an error code
     GLDErrorCode load_glm(int argc, char* argv[]);

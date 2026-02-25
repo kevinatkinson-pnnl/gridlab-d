@@ -67,9 +67,26 @@ int plugload::create()
 	return res;
 }
 
+void plugload::shared_init(void)
+{
+	// These variables need initialized every time regardless of checkpoint load
+	// Non-published variables (not loaded from checkpoint) must be initialized here
+	// (plugload class has no non-published variables at this time)
+}
+
+int plugload::checkpoint_init(OBJECT *parent)
+{
+	// Only initialize variables that aren't published.  If a variable is published, it will be loaded from checkpoint, and we don't want to reinitialize it.
+	shared_init();
+	return residential_enduse::checkpoint_init(parent);
+}
+
 int plugload::init(OBJECT *parent)
 {
-	OBJECT *hdr = OBJECTHDR(this);
+	// Initialize non-published variables
+	shared_init();
+	
+	OBJECT *hdr = object_header(this);
 	hdr->flags |= OF_SKIPSAFE;
 
 	load.breaker_amps = 40;
@@ -144,7 +161,7 @@ EXPORT int create_plugload(OBJECT **obj, OBJECT *parent)
 		*obj = gl_create_object(plugload::oclass);
 		if (*obj!=nullptr)
 		{
-			plugload *my = OBJECTDATA(*obj,plugload);;
+			plugload *my = object_data<plugload>(*obj);;
 			gl_set_parent(*obj,parent);
 			my->create();
 			return 1;
@@ -159,7 +176,7 @@ EXPORT int init_plugload(OBJECT *obj)
 {
 	try
 	{
-		plugload *my = OBJECTDATA(obj,plugload);
+		plugload *my = object_data<plugload>(obj);
 		return my->init(obj->parent);
 	}
 	INIT_CATCHALL(plugload);
@@ -168,17 +185,23 @@ EXPORT int init_plugload(OBJECT *obj)
 EXPORT int isa_plugload(OBJECT *obj, char *classname)
 {
 	if(obj != 0 && classname != 0){
-		return OBJECTDATA(obj,plugload)->isa(classname);
+		return object_data<plugload>(obj)->isa(classname);
 	} else {
 		return 0;
 	}
+}
+
+EXPORT int checkpoint_init_plugload(OBJECT *obj)
+{
+	plugload *my = object_data<plugload>(obj);
+	return my->checkpoint_init(obj->parent);
 }
 
 EXPORT TIMESTAMP sync_plugload(OBJECT *obj, TIMESTAMP t0)
 {
 	try
 	{
-		plugload *my = OBJECTDATA(obj, plugload);
+		plugload *my = object_data<plugload>(obj);
 		TIMESTAMP t1 = my->sync(obj->clock, t0);
 		obj->clock = t0;
 		return t1;

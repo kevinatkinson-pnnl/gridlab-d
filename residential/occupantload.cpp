@@ -63,8 +63,32 @@ int occupantload::create()
 	return res;
 }
 
+void occupantload::shared_init(void)
+{
+	// These variables need initialized every time regardless of checkpoint load
+	// Non-published variables (not loaded from checkpoint) must be initialized here
+	// (occupantload class has no non-published variables at this time)
+}
+
+int occupantload::checkpoint_init(OBJECT *parent)
+{
+	if(parent != nullptr){
+		if((parent->flags & OF_INIT) != OF_INIT){
+			char objname[256];
+			gl_verbose("occupantload::init(): deferring initialization on %s", gl_name(parent, objname, 255));
+			return 2; // defer
+		}
+	}	
+	// Only initialize variables that aren't published.  If a variable is published, it will be loaded from checkpoint, and we don't want to reinitialize it.
+	shared_init();
+	return SUCCESS;
+}
+
 int occupantload::init(OBJECT *parent)
 {
+	// Initialize non-published variables
+	shared_init();
+	
 	if(parent != nullptr){
 		if((parent->flags & OF_INIT) != OF_INIT){
 			char objname[256];
@@ -75,7 +99,7 @@ int occupantload::init(OBJECT *parent)
 	if (number_of_occupants==0)	number_of_occupants = 4;		// defaulted to 4, but perhaps define it based on house size??
 	if (heatgain_per_person==0) heatgain_per_person = 400.0;	// Based on DOE-2, includes latent and sensible heatgain
 
-	OBJECT *hdr = OBJECTHDR(this);
+	OBJECT *hdr = object_header(this);
 	hdr->flags |= OF_SKIPSAFE;
 
 	if (parent==nullptr || (!gl_object_isa(parent,"house") && !gl_object_isa(parent,"house_e")))
@@ -175,7 +199,7 @@ EXPORT int create_occupantload(OBJECT **obj, OBJECT *parent)
 		*obj = gl_create_object(occupantload::oclass);
 		if (*obj!=nullptr)
 		{
-			occupantload *my = OBJECTDATA(*obj,occupantload);;
+			occupantload *my = object_data<occupantload>(*obj);;
 			gl_set_parent(*obj,parent);
 			my->create();
 			return 1;
@@ -190,7 +214,7 @@ EXPORT int init_occupantload(OBJECT *obj)
 {
 	try
 	{
-		occupantload *my = OBJECTDATA(obj,occupantload);
+		occupantload *my = object_data<occupantload>(obj);
 		return my->init(obj->parent);
 	}
 	INIT_CATCHALL(occupantload);
@@ -199,17 +223,23 @@ EXPORT int init_occupantload(OBJECT *obj)
 EXPORT int isa_occupantload(OBJECT *obj, char *classname)
 {
 	if(obj != 0 && classname != 0){
-		return OBJECTDATA(obj,occupantload)->isa(classname);
+		return object_data<occupantload>(obj)->isa(classname);
 	} else {
 		return 0;
 	}
+}
+
+EXPORT int checkpoint_init_occupantload(OBJECT *obj)
+{
+	occupantload *my = object_data<occupantload>(obj);
+	return my->checkpoint_init(obj->parent);
 }
 
 EXPORT TIMESTAMP sync_occupantload(OBJECT *obj, TIMESTAMP t0)
 {
 	try
 	{
-		occupantload *my = OBJECTDATA(obj, occupantload);
+		occupantload *my = object_data<occupantload>(obj);
 		TIMESTAMP t1 = my->sync(obj->clock, t0);
 		obj->clock = t0;
 		return t1;

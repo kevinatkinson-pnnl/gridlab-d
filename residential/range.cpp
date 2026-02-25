@@ -123,6 +123,16 @@ range::range(MODULE *module) : residential_enduse(module){
 			PT_double,"previous_load[kW]",PADDR(prev_load),PT_DESCRIPTION, "the actual load based on current voltage stored for use in controllers",
 			PT_complex,"actual_power[kVA]",PADDR(range_actual_power), PT_DESCRIPTION, "the actual power based on the current voltage across the coils",
 			PT_double,"is_range_on",PADDR(is_range_on),PT_DESCRIPTION, "simple logic output to determine state of range (1-on, 0-off)",
+			PT_double,"time_to_transition",PADDR(time_to_transition), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for time to transition",
+			PT_double,"cycle_duration_cooktop",PADDR(cycle_duration_cooktop), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for cycle duration cooktop",
+			PT_double,"cycle_time_cooktop",PADDR(cycle_time_cooktop), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for cycle time cooktop",
+			PT_double,"state_time",PADDR(state_time), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for state time",
+			PT_double,"Tlower",PADDR(Tlower), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for Tlower",
+			PT_double,"Tlower_old",PADDR(Tlower_old), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for Tlower_old",
+			PT_double,"Tupper",PADDR(Tupper), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for Tupper",
+			PT_double,"Tupper_old",PADDR(Tupper_old), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for Tupper_old",
+			PT_double,"Tw_old",PADDR(Tw_old), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for Tw_old",
+			PT_double,"oven_demand_old",PADDR(oven_demand_old), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for oven_demand_old",
 			nullptr)<1)
 			GL_THROW("unable to publish properties in %s",__FILE__);
 	}
@@ -135,7 +145,7 @@ range::~range()
 int range::create() 
 {
 
-	OBJECT *hdr = OBJECTHDR(this);
+	OBJECT *hdr = object_header(this);
 	int res = residential_enduse::create();
 
 	// initialize public values
@@ -221,26 +231,15 @@ int range::create()
 
 }
 
-/** Initialize oven model properties - randomized defaults for all published variables
+/** Shared initialization for both normal init and checkpoint restore
  **/
-int range::init(OBJECT *parent)
+void range::shared_init(void)
 {
-	// @todo This class has serious problems and should be deleted and started from scratch. Fuller 9/27/2013.
-	
-	if(parent != nullptr){
-		if((parent->flags & OF_INIT) != OF_INIT){
-			char objname[256];
-			gl_verbose("range::init(): deferring initialization on %s", gl_name(parent, objname, 255));
-			return 2; // defer
-		}
-	}
-	OBJECT *hdr = OBJECTHDR(this);
-	hdr->flags |= OF_SKIPSAFE;
-
+	OBJECT *parent = object_header(this)->parent;
 	static double sTair = 74;
 	static double sTout = 68;
-	if (heat_fraction==0) heat_fraction = 0.2;
 
+	// Initialize pointers to parent properties
 	if(parent){
 		pTair = gl_get_double_by_name(parent, "air_temperature");
 		pTout = gl_get_double_by_name(parent, "outdoor_temperature");
@@ -254,6 +253,45 @@ int range::init(OBJECT *parent)
 		pTout = &sTout;
 		gl_warning("range parent lacks \'outside_temperature\' property, using default");
 	}
+}
+
+/** Called when restoring from checkpoint to reinitialize non-published variables
+ **/
+int range::checkpoint_init(OBJECT *parent)
+{
+	if(parent != nullptr){
+		if((parent->flags & OF_INIT) != OF_INIT){
+			char objname[256];
+			gl_verbose("range::init(): deferring initialization on %s", gl_name(parent, objname, 255));
+			return 2; // defer
+		}
+	}
+
+	shared_init();
+	return residential_enduse::checkpoint_init(parent);
+}
+
+/** Initialize oven model properties - randomized defaults for all published variables
+ **/
+int range::init(OBJECT *parent)
+{
+	// @todo This class has serious problems and should be deleted and started from scratch. Fuller 9/27/2013.
+	
+	if(parent != nullptr){
+		if((parent->flags & OF_INIT) != OF_INIT){
+			char objname[256];
+			gl_verbose("range::init(): deferring initialization on %s", gl_name(parent, objname, 255));
+			return 2; // defer
+		}
+	}
+
+	OBJECT *hdr = object_header(this);
+	hdr->flags |= OF_SKIPSAFE;
+
+	if (heat_fraction==0) heat_fraction = 0.2;
+
+	// Initialize pointers and other non-published variables
+	shared_init();
 
 	/* sanity checks */
 	/* initialize oven volume */
@@ -305,9 +343,6 @@ int range::init(OBJECT *parent)
 	}
 	current_model = NONE;
 	load_state = STABLE;
-
-	// initial demand
-	Tset_curtail	= oven_setpoint - thermostat_deadband/2 - 10;  // Allow T to drop only 10 degrees below lower cut-in T...
 
 	// Setup derived characteristics...
 	area 		= (pi * pow(oven_diameter,2))/4;
@@ -395,7 +430,7 @@ int range::isa(char *classname)
 void range::thermostat(TIMESTAMP t0, TIMESTAMP t1){
 	Ton  = oven_setpoint - thermostat_deadband/2;
 	Toff = oven_setpoint + thermostat_deadband/2;
-	OBJECT *hdr = OBJECTHDR(this);
+	OBJECT *hdr = object_header(this);
 
 	switch(range_state()){
 
@@ -459,7 +494,7 @@ void range::thermostat(TIMESTAMP t0, TIMESTAMP t1){
 TIMESTAMP range::presync(TIMESTAMP t0, TIMESTAMP t1){
 	/* time has passed ~ calculate internal gains, height change, temperature change */
 	double nHours = (gl_tohours(t1) - gl_tohours(t0))/TS_SECOND;
-	OBJECT *my = OBJECTHDR(this);
+	OBJECT *my = object_header(this);
 
 	// update temperature and height
 	update_T_and_or_h(nHours);
@@ -643,7 +678,7 @@ TIMESTAMP range::sync(TIMESTAMP t0, TIMESTAMP t1)
 
 double range::update_state(double dt1,TIMESTAMP t1)
 {	
-	OBJECT *hdr = OBJECTHDR(this);
+	OBJECT *hdr = object_header(this);
 	cooktop_energy_used += total_power_cooktop* dt1/3600;
 	double temp_voltage_magnitude;
 
@@ -1133,7 +1168,7 @@ double range::dhdt(double h)
 
 double range::actual_kW(void)
 {
-	OBJECT *obj = OBJECTHDR(this);
+	OBJECT *obj = object_header(this);
     static int trip_counter = 0;
 	double actual_voltage;
 
@@ -1209,7 +1244,7 @@ inline double range::new_temp_1node(double T0, double delta_t)
 double range::get_Tambient(enumeration loc)
 {
 	double ratio;
-	OBJECT *parent = OBJECTHDR(this)->parent;
+	OBJECT *parent = object_header(this)->parent;
 
 	switch (loc) {
 	case GARAGE: // temperature is about 1/2 way between indoor and outdoor
@@ -1222,7 +1257,7 @@ double range::get_Tambient(enumeration loc)
 	}
 
 	// return temperature of location
-	//house *pHouse = OBJECTDATA(OBJECTHDR(this)->parent,house);
+	//house *pHouse = OBJECTDATA(object_header(this)->parent,house);
 	//return pHouse->get_Tair()*ratio + pHouse->get_Tout()*(1-ratio);
 	return *pTair * ratio + *pTout *(1-ratio);
 }
@@ -1230,7 +1265,7 @@ double range::get_Tambient(enumeration loc)
 //void range::wrong_model(enumeration msg)
 //{
 //	char *errtxt[] = {"model is not one-zone","model is not two-zone"};
-//	OBJECT *obj = OBJECTHDR(this);
+//	OBJECT *obj = object_header(this);
 //	gl_warning("%s (range:%d): %s", obj->name?obj->name:"(anonymous object)", obj->id, errtxt[msg]);
 //	throw msg; // this must be caught by the range code, not by the core
 //}
@@ -1244,7 +1279,7 @@ EXPORT int create_range(OBJECT **obj, OBJECT *parent)
 	*obj = gl_create_object(range::oclass);
 	if (*obj!=nullptr)
 	{
-		range *my = OBJECTDATA(*obj,range);;
+		range *my = object_data<range>(*obj);;
 		gl_set_parent(*obj,parent);
 		my->create();
 		return 1;
@@ -1254,23 +1289,27 @@ EXPORT int create_range(OBJECT **obj, OBJECT *parent)
 
 EXPORT int init_range(OBJECT *obj)
 {
-	range *my = OBJECTDATA(obj,range);
+	range *my = object_data<range>(obj);
 	return my->init(obj->parent);
 }
 
 EXPORT int isa_range(OBJECT *obj, char *classname)
 {
 	if(obj != 0 && classname != 0){
-		return OBJECTDATA(obj,range)->isa(classname);
+		return object_data<range>(obj)->isa(classname);
 	} else {
 		return 0;
 	}
 }
 
+EXPORT int checkpoint_init_range(OBJECT *obj)
+{
+	return object_data<range>(obj)->checkpoint_init(obj->parent);
+}
 
 EXPORT TIMESTAMP sync_range(OBJECT *obj, TIMESTAMP t0, PASSCONFIG pass)
 {
-	range *my = OBJECTDATA(obj, range);
+	range *my = object_data<range>(obj);
 	if (obj->clock <= ROUNDOFF)
 		obj->clock = t0;  //set the object clock if it has not been set yet
 	try {
@@ -1301,7 +1340,7 @@ EXPORT TIMESTAMP sync_range(OBJECT *obj, TIMESTAMP t0, PASSCONFIG pass)
 
 EXPORT int commit_range(OBJECT *obj)
 {
-	range *my = OBJECTDATA(obj,range);
+	range *my = object_data<range>(obj);
 	return my->commit();
 }
 
@@ -1311,7 +1350,7 @@ EXPORT TIMESTAMP plc_range(OBJECT *obj, TIMESTAMP t0)
 	if (obj->clock <= ROUNDOFF)
 		obj->clock = t0;  //set the clock if it has not been set yet
 
-	range *my = OBJECTDATA(obj,range);
+	range *my = object_data<range>(obj);
 	my->thermostat(obj->clock, t0);
 	
 	// no changes to timestamp will be made by the internal oven thermostat

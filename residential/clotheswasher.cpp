@@ -48,8 +48,9 @@ clotheswasher::clotheswasher(MODULE *module) : residential_enduse(module)
 			PT_INHERIT, "residential_enduse",
 			PT_double,"motor_power[kW]",PADDR(shape.params.analog.power),
 			PT_double,"circuit_split",PADDR(circuit_split),
-			PT_double,"queue[unit]",PADDR(enduse_queue), PT_DESCRIPTION, "the total laundry accumulated",
-			PT_double,"demand[unit/day]",PADDR(enduse_demand), PT_DESCRIPTION, "the amount of laundry accumulating daily",			
+			PT_double,"queue[unit]",PADDR(enduse_queue), PT_DESCRIPTION, "the total laundry accumulated",				
+			PT_double,"demand[unit/day]",PADDR(enduse_demand), PT_DESCRIPTION, "the amount of laundry accumulating daily",
+			PT_double,"cycle_duration[s]",PADDR(cycle_duration), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for cycle duration",
 			PT_complex,"energy_meter[kWh]",PADDR(load.energy),
 			PT_double,"stall_voltage[V]", PADDR(stall_voltage),
 			PT_double,"start_voltage[V]", PADDR(start_voltage),
@@ -152,7 +153,7 @@ int clotheswasher::create()
 	load.power_factor = 0.95;
 	load.power_fraction = 1.0;
 
-	gl_warning("explicit %s model is experimental", OBJECTHDR(this)->oclass->name);
+	gl_warning("explicit %s model is experimental", object_header(this)->oclass->name);
 	/* TROUBLESHOOT
 		The clothes washer explicit model has some serious issues and should be considered for complete
 		removal.  It is highly suggested that this model NOT be used.
@@ -161,9 +162,34 @@ int clotheswasher::create()
 	return res;
 }
 
+void clotheswasher::shared_init(void)
+{
+
+
+	// These variables need intialized every time regardless of checkpoint load
+	// Non-published variables (not loaded from checkpoint) must be initialized here
+	starttime = false;
+	new_running_state = false;
+	cycle_time = 0.0;
+}
+
+int clotheswasher::checkpoint_init(OBJECT *parent)
+{
+	if(parent != nullptr){
+		if((parent->flags & OF_INIT) != OF_INIT){
+			char objname[256];
+			gl_verbose("clotheswasher::init(): deferring initialization on %s", gl_name(parent, objname, 255));
+			return 2; // defer
+		}
+	}
+	// Only initialize variables that aren't published.  If a variable is published, it will be loaded from checkpoint, and we don't want to reinitialize it.
+	shared_init();
+	return residential_enduse::checkpoint_init(parent);
+}
+
 int clotheswasher::init(OBJECT *parent)
 {
-	OBJECT *hdr = OBJECTHDR(this);
+	OBJECT *hdr = object_header(this);
 	if(parent != nullptr){
 		if((parent->flags & OF_INIT) != OF_INIT){
 			char objname[256];
@@ -172,6 +198,8 @@ int clotheswasher::init(OBJECT *parent)
 		}
 	}
 	hdr->flags |= OF_SKIPSAFE;
+	// Initialize non-published variables
+	shared_init();
 	
 	// default properties
 	if (shape.params.analog.power==0) shape.params.analog.power = gl_random_uniform(&hdr->rng_state,0.100,0.750);		// clotheswasher size [W]
@@ -289,7 +317,7 @@ TIMESTAMP clotheswasher::sync(TIMESTAMP t0, TIMESTAMP t1)
 double clotheswasher::update_state(double dt)
 {
 
-	OBJECT *hdr = OBJECTHDR(this);
+	OBJECT *hdr = object_header(this);
 
 	// accumulating units in the queue no matter what happens
 	enduse_queue += enduse_demand * dt/3600/24;
@@ -767,7 +795,7 @@ EXPORT int create_clotheswasher(OBJECT **obj, OBJECT *parent)
 	*obj = gl_create_object(clotheswasher::oclass);
 	if (*obj!=nullptr)
 	{
-		clotheswasher *my = OBJECTDATA(*obj,clotheswasher);
+		clotheswasher *my = object_data<clotheswasher>(*obj);
 		gl_set_parent(*obj,parent);
 		my->create();
 		return 1;
@@ -777,14 +805,20 @@ EXPORT int create_clotheswasher(OBJECT **obj, OBJECT *parent)
 
 EXPORT int init_clotheswasher(OBJECT *obj)
 {
-	clotheswasher *my = OBJECTDATA(obj,clotheswasher);
+	clotheswasher *my = object_data<clotheswasher>(obj);
 	return my->init(obj->parent);
+}
+
+EXPORT int checkpoint_init_clotheswasher(OBJECT *obj)
+{
+	clotheswasher *my = object_data<clotheswasher>(obj);
+	return my->checkpoint_init(obj->parent);
 }
 
 EXPORT int isa_clotheswasher(OBJECT *obj, char *classname)
 {
 	if(obj != 0 && classname != 0){
-		return OBJECTDATA(obj,clotheswasher)->isa(classname);
+		return object_data<clotheswasher>(obj)->isa(classname);
 	} else {
 		return 0;
 	}
@@ -792,7 +826,7 @@ EXPORT int isa_clotheswasher(OBJECT *obj, char *classname)
 
 EXPORT TIMESTAMP sync_clotheswasher(OBJECT *obj, TIMESTAMP t0, PASSCONFIG pass)
 {
-	clotheswasher *my = OBJECTDATA(obj, clotheswasher);
+	clotheswasher *my = object_data<clotheswasher>(obj);
 	if (obj->clock <= ROUNDOFF)
 		obj->clock = t0;  //set the object clock if it has not been set yet
 	try {

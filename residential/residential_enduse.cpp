@@ -71,12 +71,14 @@ int residential_enduse::create(bool connect_shape)
 	return 1;
 }
 
-int residential_enduse::init(OBJECT *parent)
+/** Shared initialization for both normal init and checkpoint restore
+ **/
+void residential_enduse::shared_init(void)
 {
-	set_flags(get_flags()|OF_SKIPSAFE);
-	gld_object *pParent = OBJECTDATA(parent,gld_object);
-
-	//	pull parent attach_enduse and attach the enduseload
+	OBJECT *parent = object_header(this)->parent;
+	gld_object *pParent = object_data<gld_object>(parent);
+	
+	// Attach to parent's circuit (reinitialize pCircuit pointer)
 	if ( pParent!=nullptr && pParent->is_valid() )
 	{
 		ATTACHFUNCTION attach = (ATTACHFUNCTION)pParent->get_function("attach_enduse");
@@ -84,12 +86,43 @@ int residential_enduse::init(OBJECT *parent)
 			pCircuit = (*attach)(parent, &load, load.breaker_amps, (load.config&EUC_IS220)!=0);
 		else
 			gl_warning("%s (%s:%d) parent %s (%s:%d) does not export attach_enduse function so voltage response cannot be modeled", get_name(), get_oclass()->get_name(), get_id(), pParent->get_name(), pParent->get_oclass()->get_name(), pParent->get_id());
-			/* TROUBLESHOOT
-				Enduses must have a voltage source from a parent object that exports an attach_enduse function.  
-				The residential_enduse object references a parent object that does not conform with this requirement.
-				Fix the parent reference and try again.
-			 */
 	}
+}
+
+/** Called when restoring from checkpoint to reinitialize non-published variables
+ **/
+int residential_enduse::checkpoint_init(OBJECT *parent)
+{
+	set_flags(get_flags()|OF_SKIPSAFE);
+	gld_object *pParent = object_data<gld_object>(parent);
+	//	pull parent attach_enduse and attach the enduseload
+	if ( pParent!=nullptr && pParent->is_valid() )
+	{
+        if ((pParent->get_flags() & OF_INIT) != OF_INIT)
+        {
+            return 2;
+        }
+	}
+		
+	shared_init();
+	return SUCCESS;
+}
+
+int residential_enduse::init(OBJECT *parent)
+{
+	set_flags(get_flags()|OF_SKIPSAFE);
+	gld_object *pParent = object_data<gld_object>(parent);
+	//	pull parent attach_enduse and attach the enduseload
+	if ( pParent!=nullptr && pParent->is_valid() )
+	{
+        if ((pParent->get_flags() & OF_INIT) != OF_INIT)
+        {
+            return 2;
+        }
+	}
+	
+	// Initialize pCircuit pointer and other non-published variables
+	shared_init();
 
 	if (load.shape!=nullptr) {
 		if (load.shape->schedule==nullptr)
@@ -101,7 +134,7 @@ int residential_enduse::init(OBJECT *parent)
 				load off and this is not typically intended.
 			 */
 		}
-	}
+	};
 
 	return 1;
 }
@@ -133,7 +166,7 @@ EXPORT int create_residential_enduse(OBJECT **obj, OBJECT *parent)
 		*obj = gl_create_object(residential_enduse::oclass);
 		if (*obj!=nullptr)
 		{
-			residential_enduse *my = OBJECTDATA(*obj,residential_enduse);
+			residential_enduse *my = object_data<residential_enduse>(*obj);
 			gl_set_parent(*obj,parent);
 			return my->create();
 		}
@@ -146,7 +179,7 @@ EXPORT int create_residential_enduse(OBJECT **obj, OBJECT *parent)
 EXPORT int init_residential_enduse(OBJECT *obj)
 {
 	try {
-		residential_enduse *my = OBJECTDATA(obj,residential_enduse);
+		residential_enduse *my = object_data<residential_enduse>(obj);
 		return my->init(obj->parent);
 	}
 	INIT_CATCHALL(residential_enduse);
@@ -155,15 +188,20 @@ EXPORT int init_residential_enduse(OBJECT *obj)
 EXPORT int isa_residential_enduse(OBJECT *obj, char *classname)
 {
 	if(obj != 0 && classname != 0){
-		return OBJECTDATA(obj,residential_enduse)->isa(classname);
+		return object_data<residential_enduse>(obj)->isa(classname);
 	} else {
 		return 0;
 	}
 }
 
+EXPORT int checkpoint_init_residential_enduse(OBJECT *obj)
+{
+	return object_data<residential_enduse>(obj)->checkpoint_init(obj->parent);
+}
+
 EXPORT TIMESTAMP sync_residential_enduse(OBJECT *obj, TIMESTAMP t1)
 {
-	residential_enduse *my = OBJECTDATA(obj,residential_enduse);
+	residential_enduse *my = object_data<residential_enduse>(obj);
 	try {
 		TIMESTAMP t2 = my->sync(obj->clock, t1);
 		obj->clock = t1;

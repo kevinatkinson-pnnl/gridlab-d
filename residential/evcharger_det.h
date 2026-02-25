@@ -70,9 +70,11 @@ public:
 	static CLASS *oclass, *pclass;
 
 	evcharger_det(MODULE *module);
-	~evcharger_det();
+	~evcharger_det() {}
 	int create();
 	int init(OBJECT *parent);
+	int checkpoint_init(OBJECT *parent);
+	void shared_init(void);
 	int isa(char *classname);
 	TIMESTAMP sync(TIMESTAMP t0, TIMESTAMP t1);
 	TIMESTAMP postsync(TIMESTAMP t0, TIMESTAMP t1);

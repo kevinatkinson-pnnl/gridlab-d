@@ -63,13 +63,13 @@
 	\endverbatim
 	where \e DAYTYPE is either \p WEEKDAY or \p WEEKEND, 
 	\e DIR is either \p ARR or \p DEP, and \e TRIP 
-	is either \p HOME, \p WORK, \p SHRT, or \p LONG.  There must be 24 rows of numbers,
+	is either \p HOME, \p WORK, \p SHRT, or \p LONG.  There must be 24.rows() of numbers,
 	the numbers must be positive numbers between 0 and 1, and each column must be normalized
 	(they must add up to 1.000 over the 24 hour period). 
 
 	You may introduce as many daytype blocks as are supported simultaneously (2 max at this time).
 
-	@todo the 24 rows are not check for compliance with the 24 hour rule, the 0-1 rule, or the normalized rule.
+	@todo the 24.rows() are not check for compliance with the 24 hour rule, the 0-1 rule, or the normalized rule.
  @{
  **/
 
@@ -82,6 +82,19 @@
 #include <gridlabd.h>
 
 #include "evcharger.h"
+
+
+#ifndef X_OK
+#define X_OK 0x01
+#endif
+
+#ifndef R_OK
+#define R_OK 0x02
+#endif
+
+#ifndef F_OK
+#define F_OK 0  // Define F_OK to represent file existence checks
+#endif
 
 /////////////////////////////////////////////////////////////////////
 /// EV Demand Profiles
@@ -333,8 +346,36 @@ static double fuse[] = {15,35,70};
 static double amps[] = {12,28,55};
 static bool hiV[] = {false,true,true};
 
+void evcharger::shared_init(void)
+{
+	// These variables need initialized every time regardless of checkpoint load
+	// Non-published variables (not loaded from checkpoint) must be initialized here
+	
+	// load demand profile - pDemand is a private pointer that must be reloaded
+	pDemand = nullptr;  // Initialize to null first
+	if (strcmp(demand_profile,"")!=0)
+		pDemand = get_demand_profile(demand_profile);
+}
+
+int evcharger::checkpoint_init(OBJECT *parent)
+{
+	if(parent != nullptr){
+		if((parent->flags & OF_INIT) != OF_INIT){
+			char objname[256];
+			gl_verbose("evcharger::init(): deferring initialization on %s", gl_name(parent, objname, 255));
+			return 2; // defer
+		}
+	}	
+	// Only initialize variables that aren't published.  If a variable is published, it will be loaded from checkpoint, and we don't want to reinitialize it.
+	shared_init();
+	return residential_enduse::checkpoint_init(parent);
+}
+
 int evcharger::init(OBJECT *parent)
 {
+	// Initialize non-published variables
+	shared_init();
+	
 	int retval;
 
 	if(parent != nullptr){
@@ -364,7 +405,7 @@ int evcharger::init(OBJECT *parent)
 	//if (distance.shorttrip==0) distance.shorttrip = gl_random_lognormal(3,1);
 	//if (distance.longtrip==0) distance.longtrip = gl_random_lognormal(4,2);
 
-	OBJECT *hdr = OBJECTHDR(this);
+	OBJECT *hdr = object_header(this);
 	hdr->flags |= OF_SKIPSAFE;
 
 	//Make sure the efficiency is valid
@@ -376,10 +417,6 @@ int evcharger::init(OBJECT *parent)
 		value.
 		*/
 	}
-
-	// load demand profile
-	if (strcmp(demand_profile,"")!=0)
-		pDemand = get_demand_profile(demand_profile);
 	
 	retval = residential_enduse::init(parent);
 
@@ -397,7 +434,7 @@ double evcharger::update_state(double dt /* seconds */)
 {
 	double temp_voltage_magnitude;
 	
-	OBJECT *obj = OBJECTHDR(this);
+	OBJECT *obj = object_header(this);
 	if (obj->clock>TS_ZERO && dt>0)
 	{
 		DATETIME now;
@@ -576,7 +613,7 @@ double evcharger::update_state(double dt /* seconds */)
 
 TIMESTAMP evcharger::sync(TIMESTAMP t0, TIMESTAMP t1) 
 {
-	OBJECT *obj = OBJECTHDR(this);
+	OBJECT *obj = object_header(this);
 	// compute the total load and heat gain
 	if (t0>TS_ZERO && t1>t0)
 			load.energy += (load.total * gl_tohours(t1-t0));
@@ -604,7 +641,7 @@ EXPORT int create_evcharger(OBJECT **obj, OBJECT *parent)
 		*obj = gl_create_object(evcharger::oclass);
 		if (*obj!=nullptr)
 		{
-			evcharger *my = OBJECTDATA(*obj,evcharger);;
+			evcharger *my = object_data<evcharger>(*obj);;
 			gl_set_parent(*obj,parent);
 			my->create();
 			return 1;
@@ -618,7 +655,7 @@ EXPORT int create_evcharger(OBJECT **obj, OBJECT *parent)
 EXPORT int init_evcharger(OBJECT *obj)
 {
 	try {
-		evcharger *my = OBJECTDATA(obj,evcharger);
+		evcharger *my = object_data<evcharger>(obj);
 		return my->init(obj->parent);
 	}
 	INIT_CATCHALL(evcharger);
@@ -627,16 +664,22 @@ EXPORT int init_evcharger(OBJECT *obj)
 EXPORT int isa_evcharger(OBJECT *obj, char *classname)
 {
 	if(obj != 0 && classname != 0){
-		return OBJECTDATA(obj,evcharger)->isa(classname);
+		return object_data<evcharger>(obj)->isa(classname);
 	} else {
 		return 0;
 	}
 }
 
+EXPORT int checkpoint_init_evcharger(OBJECT *obj)
+{
+	evcharger *my = object_data<evcharger>(obj);
+	return my->checkpoint_init(obj->parent);
+}
+
 EXPORT TIMESTAMP sync_evcharger(OBJECT *obj, TIMESTAMP t0)
 {
 	try {
-		evcharger *my = OBJECTDATA(obj, evcharger);
+		evcharger *my = object_data<evcharger>(obj);
 		TIMESTAMP t1 = my->sync(obj->clock, t0);
 		obj->clock = t0;
 		return t1;

@@ -106,7 +106,14 @@ int lights::create(void)
 	return res;
 }
 
-int lights::init(OBJECT *parent)
+void lights::shared_init(void)
+{
+	// These variables need initialized every time regardless of checkpoint load
+	// Non-published variables (not loaded from checkpoint) must be initialized here
+	// (lights class has no non-published variables at this time)
+}
+
+int lights::checkpoint_init(OBJECT *parent)
 {
 	if(parent != nullptr){
 		if((parent->flags & OF_INIT) != OF_INIT){
@@ -114,8 +121,25 @@ int lights::init(OBJECT *parent)
 			gl_verbose("lights::init(): deferring initialization on %s", gl_name(parent, objname, 255));
 			return 2; // defer
 		}
+	}	
+	// Only initialize variables that aren't published.  If a variable is published, it will be loaded from checkpoint, and we don't want to reinitialize it.
+	shared_init();
+	return residential_enduse::checkpoint_init(parent);
+}
+
+int lights::init(OBJECT *parent)
+{
+	// Initialize non-published variables
+	shared_init();
+	
+	if(parent != nullptr){
+		if((parent->flags & OF_INIT) != OF_INIT){
+			char objname[256];
+			gl_verbose("lights::init(): deferring initialization on %s", gl_name(parent, objname, 255));
+			return 2; // defer
+		}
 	}
-	OBJECT *hdr = OBJECTHDR(this);
+	OBJECT *hdr = object_header(this);
 	hdr->flags |= OF_SKIPSAFE;
 
 	// check the load configuration before initializing the parent class
@@ -262,7 +286,7 @@ EXPORT int create_lights(OBJECT **obj, OBJECT *parent)
 		*obj = gl_create_object(lights::oclass);
 		if (*obj!=nullptr)
 		{
-			lights *my = OBJECTDATA(*obj,lights);
+			lights *my = object_data<lights>(*obj);
 			gl_set_parent(*obj,parent);
 			return my->create();
 		}
@@ -275,7 +299,7 @@ EXPORT int create_lights(OBJECT **obj, OBJECT *parent)
 EXPORT int init_lights(OBJECT *obj)
 {
 	try {
-		lights *my = OBJECTDATA(obj,lights);
+		lights *my = object_data<lights>(obj);
 		return my->init(obj->parent);
 	}
 	INIT_CATCHALL(lights);
@@ -284,16 +308,22 @@ EXPORT int init_lights(OBJECT *obj)
 EXPORT int isa_lights(OBJECT *obj, char *classname)
 {
 	if(obj != 0 && classname != 0){
-		return OBJECTDATA(obj,lights)->isa(classname);
+		return object_data<lights>(obj)->isa(classname);
 	} else {
 		return 0;
 	}
 }
 
+EXPORT int checkpoint_init_lights(OBJECT *obj)
+{
+	lights *my = object_data<lights>(obj);
+	return my->checkpoint_init(obj->parent);
+}
+
 EXPORT TIMESTAMP sync_lights(OBJECT *obj, TIMESTAMP t1)
 {
 	try {
-		lights *my = OBJECTDATA(obj,lights);
+		lights *my = object_data<lights>(obj);
 		TIMESTAMP t2 = my->sync(obj->clock, t1);
 		obj->clock = t1;
 		return t2;

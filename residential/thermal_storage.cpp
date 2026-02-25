@@ -87,6 +87,9 @@ thermal_storage::thermal_storage(MODULE *mod)
 			PT_double, "discharge_time", PADDR(discharge_time), PT_DESCRIPTION, "Flag indicating if discharging is available at the current time (1 or 0)",			//schedule?
 			PT_double, "discharge_rate[Btu/h]", PADDR(discharge_rate), PT_DESCRIPTION, "rating of discharge or cooling",
 			PT_double, "SOC[%]", PADDR(state_of_charge), PT_DESCRIPTION, "state of charge as percentage of total capacity",		//storage/stored capacity
+			PT_bool, "recharge", PADDR(recharge), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for recharge",
+			PT_timestamp, "last_timestep", PADDR(last_timestep), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for last timestep",
+			PT_timestamp, "next_timestep", PADDR(next_timestep), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for next timestep",
 			PT_double, "k[W/m/K]", PADDR(k), PT_DESCRIPTION, "coefficient of thermal conductivity (W/m/K)",
 			nullptr)<1) GL_THROW("unable to publish properties in %s",__FILE__);
 			/* TROUBLESHOOT
@@ -138,17 +141,12 @@ int thermal_storage::create(void)
 	return res;
 }
 
-int thermal_storage::init(OBJECT *parent)
+/** Shared initialization for both normal init and checkpoint restore
+ **/
+void thermal_storage::shared_init(void)
 {
-	if(parent != nullptr){
-		if((parent->flags & OF_INIT) != OF_INIT){
-			char objname[256];
-			gl_verbose("thermal_storage::init(): deferring initialization on %s", gl_name(parent, objname, 255));
-			return 2; // defer
-		}
-	}
-	OBJECT *hdr = OBJECTHDR(this);
-	hdr->flags |= OF_SKIPSAFE;
+	OBJECT *parent = object_header(this)->parent;
+	OBJECT *hdr = object_header(this);
 	gld_property *design_cooling_capacity_prop;
 	double design_cooling_capacity;
 
@@ -156,9 +154,6 @@ int thermal_storage::init(OBJECT *parent)
 	if (!(gl_object_isa(parent,"house","residential")))
 	{
 		GL_THROW("thermal_storage:%s must be parented to a house!",hdr->name);
-		/*  TROUBLESHOOT
-		The thermal_storage model is only valid for house objects.  Please parent it appropriately.
-		*/
 	}
 
 	//Link up the appropriate variables
@@ -170,10 +165,6 @@ int thermal_storage::init(OBJECT *parent)
 	if ((design_cooling_capacity_prop->is_valid() != true) || (design_cooling_capacity_prop->is_double() != true))
 	{
 		GL_THROW("thermal_storage:%d - %s - Unable to map house interface property",hdr->id,(hdr->name ? hdr->name : "Unnamed"));
-		/*  TROUBLESHOOT
-		While attempting to map the parent house's properties, the thermal_storage object encountered an error.  Please
-		try again.  If the error persists, please submit your code and a bug report via the issues tracker.
-		*/
 	}
 
 	//Outside temperature
@@ -183,7 +174,6 @@ int thermal_storage::init(OBJECT *parent)
 	if ((outside_temperature->is_valid() != true) || (outside_temperature->is_double() != true))
 	{
 		GL_THROW("thermal_storage:%d - %s - Unable to map house interface property",hdr->id,(hdr->name ? hdr->name : "Unnamed"));
-		//Defined above
 	}
 
 	//Thermal_storage_available
@@ -193,7 +183,6 @@ int thermal_storage::init(OBJECT *parent)
 	if ((thermal_storage_available->is_valid() != true) || (thermal_storage_available->is_bool() != true))
 	{
 		GL_THROW("thermal_storage:%d - %s - Unable to map house interface property",hdr->id,(hdr->name ? hdr->name : "Unnamed"));
-		//Defined above
 	}
 	
 	//thermal_storage_active
@@ -203,13 +192,110 @@ int thermal_storage::init(OBJECT *parent)
 	if ((thermal_storage_active->is_valid() != true) || (thermal_storage_active->is_bool() != true))
 	{
 		GL_THROW("thermal_storage:%d - %s - Unable to map house interface property",hdr->id,(hdr->name ? hdr->name : "Unnamed"));
-		//Defined above
 	}
 
-	//Pull the design cooling capacity for checks
+	//Pull the design cooling capacity (needed to validate discharge_rate setup)
 	design_cooling_capacity = design_cooling_capacity_prop->get_double();
 
-	//Check the cooling capacity
+	//clear out the temporary property
+	delete design_cooling_capacity_prop;
+
+	//Determine how to read the scheduling information - charging
+	if (recharge_schedule_type==INTERNAL)
+	{
+		//See if someone else has already created such a schedule
+		recharge_schedule_vals = gl_schedule_find(thermal_default_schedule_list[1].schedule_name);
+
+		//If not found, create
+		if (recharge_schedule_vals == nullptr)
+		{
+			//Populate schedules - charging
+			recharge_schedule_vals = gl_schedule_create(thermal_default_schedule_list[1].schedule_name,thermal_default_schedule_list[1].schedule_definition);
+
+			//Make sure it worked
+			if (recharge_schedule_vals==nullptr)
+			{
+				GL_THROW("Failure to create default charging schedule");
+			}
+		}
+
+		//Assign to the schedule value
+		recharge_time_ptr = &recharge_schedule_vals->value;
+	}
+	else
+	{
+		//Assign the to published property
+		recharge_time_ptr = &recharge_time;
+	}
+
+	//Determine how to read the scheduling information - discharging
+	if (discharge_schedule_type==INTERNAL)
+	{
+		//See if someone else has already created such a schedule
+		discharge_schedule_vals = gl_schedule_find(thermal_default_schedule_list[0].schedule_name);
+
+		//If not found, create
+		if (discharge_schedule_vals == nullptr)
+		{
+			//Populate schedules - discharging
+			discharge_schedule_vals = gl_schedule_create(thermal_default_schedule_list[0].schedule_name,thermal_default_schedule_list[0].schedule_definition);
+
+			//Make sure it worked
+			if (discharge_schedule_vals==nullptr)
+			{
+				GL_THROW("Failure to create default discharging schedule");
+			}
+		}
+
+		//Assign to the schedule value
+		discharge_time_ptr = &discharge_schedule_vals->value;
+	}
+	else
+	{
+		//Assigned to the published property
+		discharge_time_ptr = &discharge_time;
+	}
+}
+
+/** Called when restoring from checkpoint to reinitialize non-published variables
+ **/
+int thermal_storage::checkpoint_init(OBJECT *parent)
+{
+	if(parent != nullptr){
+		if((parent->flags & OF_INIT) != OF_INIT){
+			char objname[256];
+			gl_verbose("thermal_storage::init(): deferring initialization on %s", gl_name(parent, objname, 255));
+			return 2; // defer
+		}
+	}
+
+	shared_init();
+	return residential_enduse::checkpoint_init(parent);
+}
+
+int thermal_storage::init(OBJECT *parent)
+{
+	if(parent != nullptr){
+		if((parent->flags & OF_INIT) != OF_INIT){
+			char objname[256];
+			gl_verbose("thermal_storage::init(): deferring initialization on %s", gl_name(parent, objname, 255));
+			return 2; // defer
+		}
+	}
+
+	OBJECT *hdr = object_header(this);
+	hdr->flags |= OF_SKIPSAFE;
+	gld_property *design_cooling_capacity_prop;
+	double design_cooling_capacity;
+
+	// Initialize pointers and other non-published variables
+	shared_init();
+
+	//Check the cooling capacity (design_cooling_capacity already pulled in shared_init)
+	design_cooling_capacity_prop = new gld_property(parent,"design_cooling_capacity");
+	design_cooling_capacity = design_cooling_capacity_prop->get_double();
+	delete design_cooling_capacity_prop;
+
 	if (design_cooling_capacity == 0)
 	{
 		gl_warning("\'design_cooling_capacity\' not specified in parent ~ default to 5 ton or 60,000 Btu/hr");
@@ -223,9 +309,6 @@ int thermal_storage::init(OBJECT *parent)
 		discharge_rate = design_cooling_capacity;
 		water_capacity = 1.7413 * (discharge_rate / (5 * 12000));
 	}
-
-	//clear out the temporary property
-	delete design_cooling_capacity_prop;
 
 	surface_area = 6 * pow(water_capacity, 0.6667); //suface area of a cube calculated from volume
 
@@ -259,82 +342,6 @@ int thermal_storage::init(OBJECT *parent)
 	if (k < 0)							k = 0; //assume no thermal conductivity
 	k = k * 0.00052667;				//convert k from W/m/K to BTU/sec/m/degF
 
-	//Determine how to read the scheduling information - charging
-	if (recharge_schedule_type==INTERNAL)
-	{
-		//See if someone else has already created such a schedule
-		recharge_schedule_vals = gl_schedule_find(thermal_default_schedule_list[1].schedule_name);
-
-		//If not found, create
-		if (recharge_schedule_vals == nullptr)
-		{
-			//Populate schedules - charging
-			recharge_schedule_vals = gl_schedule_create(thermal_default_schedule_list[1].schedule_name,thermal_default_schedule_list[1].schedule_definition);
-
-			//Make sure it worked
-			if (recharge_schedule_vals==nullptr)
-			{
-				GL_THROW("Failure to create default charging schedule");
-				/*  TROUBLESHOOT
-				While attempting to create the default charging schedule in the thermal_storage object, an error occurred.  Please try again.
-				If the error persists, please submit your code and a bug report via the track website.
-				*/
-			}
-		}
-
-		gl_verbose("thermal_storage charging defaulting to internal schedule");
-		/*  TROUBLESHOOT
-		recharge_schedule_type was not set to EXTERNAL, so the internal schedule definition will be used
-		for the recharging schedule.
-		*/
-
-		//Assign to the schedule value
-		recharge_time_ptr = &recharge_schedule_vals->value;
-	}
-	else
-	{
-		//Assign the to published property
-		recharge_time_ptr = &recharge_time;
-	}
-
-	//Determine how to read the scheduling information - discharging
-	if (discharge_schedule_type==INTERNAL)
-	{
-		//See if someone else has already created such a schedule
-		discharge_schedule_vals = gl_schedule_find(thermal_default_schedule_list[0].schedule_name);
-
-		//If not found, create
-		if (discharge_schedule_vals == nullptr)
-		{
-			//Populate schedules - discharging
-			discharge_schedule_vals = gl_schedule_create(thermal_default_schedule_list[0].schedule_name,thermal_default_schedule_list[0].schedule_definition);
-
-			//Make sure it worked
-			if (discharge_schedule_vals==nullptr)
-			{
-				GL_THROW("Failure to create default discharging schedule");
-				/*  TROUBLESHOOT
-				While attempting to create the default discharging schedule in the thermal_storage object, an error occurred.  Please try again.
-				If the error persists, please submit your code and a bug report via the track website.
-				*/
-			}
-		}
-
-		gl_verbose("thermal_storage discharging defaulting to internal schedule");
-		/*  TROUBLESHOOT
-		discharge_schedule_type was not set to EXTERNAL, so the internal schedule definition will be used
-		for the discharging availability schedule.
-		*/
-
-		//Assign to the schedule value
-		discharge_time_ptr = &discharge_schedule_vals->value;
-	}
-	else
-	{
-		//Assigned to the published property
-		discharge_time_ptr = &discharge_time;
-	}
-
 	// waiting this long to initialize the parent class is normal
 	return residential_enduse::init(parent);
 }
@@ -350,7 +357,7 @@ TIMESTAMP thermal_storage::sync(TIMESTAMP t0, TIMESTAMP t1)
 	TIMESTAMP t2 = TS_NEVER;
 	next_timestep = TS_NEVER;
 	double actual_recharge_power, outside_temperature_val;
-	gld_wlock *test_rlock;
+	unsigned int test_rlock = 0;
 	bool temp_bool_val;
 
 	//Make sure we aren't on the first run
@@ -409,7 +416,7 @@ TIMESTAMP thermal_storage::sync(TIMESTAMP t0, TIMESTAMP t1)
 		{
 			//Recharge cycle, so ES is not available
 			temp_bool_val = false;
-			thermal_storage_available->setp<bool>(temp_bool_val,*test_rlock);
+			thermal_storage_available->setp<bool>(temp_bool_val,test_rlock);
 
 			actual_recharge_power = recharge_power * (1 + (75 - outside_temperature_val) * 0.0106);
 			if (last_timestep != t0) //only calculate energy once per timestep
@@ -439,20 +446,20 @@ TIMESTAMP thermal_storage::sync(TIMESTAMP t0, TIMESTAMP t1)
 		if (*recharge_time_ptr != 1 && *discharge_time_ptr == 1 && state_of_charge > 0 && outside_temperature_val >=15)
 		//not set to recharge, set to discharge, has charge to use and the outside air temperature is above 15 deg F
 		{
-			thermal_storage_active->getp<bool>(temp_bool_val,*test_rlock);
+			thermal_storage_active->getp<bool>(temp_bool_val,test_rlock);
 			if (temp_bool_val == false)	last_timestep = t0; //don't run energy calculations when first turned on
 
 
 			temp_bool_val = true;
-			thermal_storage_available->setp<bool>(temp_bool_val,*test_rlock);
+			thermal_storage_available->setp<bool>(temp_bool_val,test_rlock);
 
 		} else {
 			temp_bool_val = false;
-			thermal_storage_available->setp<bool>(temp_bool_val,*test_rlock);
+			thermal_storage_available->setp<bool>(temp_bool_val,test_rlock);
 		}
 
 		//Pull the bool value to see if we're active or not
-		thermal_storage_active->getp<bool>(temp_bool_val,*test_rlock);
+		thermal_storage_active->getp<bool>(temp_bool_val,test_rlock);
 
 		//Discharge cycle
 		if (recharge == 0 && *discharge_time_ptr == 1 && (temp_bool_val == true))
@@ -461,7 +468,7 @@ TIMESTAMP thermal_storage::sync(TIMESTAMP t0, TIMESTAMP t1)
 			{
 				//Capacity available - flag as available
 				temp_bool_val = true;
-				thermal_storage_available->setp<bool>(temp_bool_val,*test_rlock);
+				thermal_storage_available->setp<bool>(temp_bool_val,test_rlock);
 
 				if (last_timestep != t0) //only calculate energy once per timestep
 				{
@@ -477,7 +484,7 @@ TIMESTAMP thermal_storage::sync(TIMESTAMP t0, TIMESTAMP t1)
 			{
 				//Out of capacity - flag as unavailable
 				temp_bool_val = false;
-				thermal_storage_available->setp<bool>(temp_bool_val,*test_rlock);
+				thermal_storage_available->setp<bool>(temp_bool_val,test_rlock);
 
 				state_of_charge = 0;
 				load.power = 0;
@@ -514,7 +521,7 @@ EXPORT int create_thermal_storage(OBJECT **obj, OBJECT *parent)
 	*obj = gl_create_object(thermal_storage::oclass);
 	if (*obj!=nullptr)
 	{
-		thermal_storage *my = OBJECTDATA(*obj,thermal_storage);
+		thermal_storage *my = object_data<thermal_storage>(*obj);
 		gl_set_parent(*obj,parent);
 		try {
 			my->create();
@@ -535,7 +542,7 @@ EXPORT int create_thermal_storage(OBJECT **obj, OBJECT *parent)
 
 EXPORT int init_thermal_storage(OBJECT *obj)
 {
-	thermal_storage *my = OBJECTDATA(obj,thermal_storage);
+	thermal_storage *my = object_data<thermal_storage>(obj);
 	try {
 		return my->init(obj->parent);
 	}
@@ -553,15 +560,20 @@ EXPORT int init_thermal_storage(OBJECT *obj)
 EXPORT int isa_thermal_storage(OBJECT *obj, char *classname)
 {
 	if(obj != 0 && classname != 0){
-		return OBJECTDATA(obj,thermal_storage)->isa(classname);
+		return object_data<thermal_storage>(obj)->isa(classname);
 	} else {
 		return 0;
 	}
 }
 
+EXPORT int checkpoint_init_thermal_storage(OBJECT *obj)
+{
+	return object_data<thermal_storage>(obj)->checkpoint_init(obj->parent);
+}
+
 EXPORT TIMESTAMP sync_thermal_storage(OBJECT *obj, TIMESTAMP t1)
 {
-	thermal_storage *my = OBJECTDATA(obj,thermal_storage);
+	thermal_storage *my = object_data<thermal_storage>(obj);
 	try {
 		TIMESTAMP t2 = my->sync(obj->clock, t1);
 		obj->clock = t1;

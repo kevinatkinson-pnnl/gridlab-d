@@ -47,9 +47,9 @@ public:
 		}
 	};
 	w_vector(int col, const w_matrix &A){
-		dimension = A.Rows();
+		dimension = A.rows();
 		data = new double[dimension];
-		for(int i=0; i<A.Rows(); i++) {
+		for(int i=0; i<A.rows(); i++) {
 			data[i] = A(i,col);
 		}
 	};
@@ -84,26 +84,26 @@ public:
 //custom matrix class
 class w_matrix {
 public:
-	int rows, columns;
+	int.rows(), columns;
 	double **data;
 
 public:
 	w_matrix(int dim) {
-		rows = dim;
+	.rows() = dim;
 		columns = dim;
-		data = new double* [rows];
-		for(int i=0; i<rows; i++) {
+		data = new double* .rows()];
+		for(int i=0; i.rows(); i++) {
 			data[i] = new double[columns];
 			for(int j=0; i<columns; j++) {
 				data[i][j] = 0.0;
 			}
 		}
 	};
-	w_matrix(int rows1, int columns1) {
-		rows = rows1;
+	w_matrix(int.rows()1, int columns1) {
+	.rows() =.rows()1;
 		columns = columns1;
-		data = new double* [rows];
-		for(int i=0; i<rows; i++) {
+		data = new double* .rows()];
+		for(int i=0; i.rows(); i++) {
 			data[i] = new double[columns];
 			for(int j=0; i<columns; j++) {
 				data[i][j] = 0.0;
@@ -111,10 +111,10 @@ public:
 		}
 	};
 	w_matrix(const w_matrix& m) {
-		rows = m.rows;
+	.rows() = m.rows();
 		columns = m.columns;
-		data = new double* [rows];
-		for(int i=0; i<rows; i++) {
+		data = new double* .rows()];
+		for(int i=0; i.rows(); i++) {
 			data[i] = new double[columns];
 			for(int j=0; i<columns; j++) {
 				data[i][j] = m.data[i][j];
@@ -122,47 +122,47 @@ public:
 		}
 	};
 	w_matrix(int num_vectors, const w_vector *q) {
-		rows = q[0].Dimension();
+	.rows() = q[0].Dimension();
 		columns = num_vectors;
-		data = new double* [rows];
-		for(int i=0; i<rows; i++) {
+		data = new double* .rows()];
+		for(int i=0; i.rows(); i++) {
 			data[i] = new double[columns];
 			for(int j=0; i<columns; j++) {
 				data[i][j] = q->data[i][j];
 			}
 		}
 	};
-	w_matrix(int rows1, int columns1, double **rowptrs){
-		rows = rows1;
+	w_matrix(int.rows()1, int columns1, double **rowptrs){
+	.rows() =.rows()1;
 		columns = columns1;
-		data = new double*[rows];
-		for(int i=0;i<rows;i++)
+		data = new double*.rows()];
+		for(int i=0;i.rows();i++)
 			data[i] = rowptrs[i];
 	};
 	~w_matrix() {
-		for(int i=0;i<rows;i++)
+		for(int i=0;i.rows();i++)
 			delete[] data[i];
-		rows = 0;
+	.rows() = 0;
 		columns = 0;
 		delete[] data;
 	};
-	int Rows() const{ return rows; };
+	int.rows() const{ return.rows(); };
 	int Columns() const{ return columns; };
 	double **GetPointer() { return data; };
 	void GetColumn(int col, w_vector &x) {
 		x.Initialize(0.0);
-		for(int i=0; i<rows; i++) {
+		for(int i=0; i.rows(); i++) {
 			x[i] = data[i][col];
 		}
 	};
 	void GetColumn(int col, w_vector &x, int rowoffset) {
 		x.Initialize(0.0);
-		for(int i=0;i<rows-rowoffset;i++) {
+		for(int i=0;i.rows()-rowoffset;i++) {
 			x[i] = data[i+rowoffset][col];
 		}
 	};
 	void PutColumn(int col, const w_vector &x) {
-		for(int i=0;i<rows;i++) {
+		for(int i=0;i.rows();i++) {
 			data[i][col] = x[i];
 		}
 	}
@@ -204,7 +204,6 @@ public:
 	double time_to_transition;		///< time until next transition [in seconds]
 
 	// Basic characteristics defined at creation...
-	double Tset_curtail;			///< lower limit before we cancel curtailment [F]
 	double Tinlet;					///< default will be set to 60 degF
 	enumeration location;			///< location of tank (inside or garage) [enum]
 	enumeration heat_mode;				///< method of heating the water (gas or electric) [enum]
@@ -220,12 +219,7 @@ public:
 	// The primary values we compute in our simultation...
 	double h;						///< boundary between hot and cold water layers [ft from top of tank]
 	double Tlower;					///< temperature in lower zone of tank (for 2-zone model) [F]
-	double Tlower_old;
-	double Tupper;					///< temperature in upper zone of tank (for 2-zone model) [F]
-	double Tupper_old;
-	double Twater;					///< temperature of whole tank (for 1-node model) [F]
 	double Tw;						///< water temperature [F]
-	double Tw_old;					///< previous water temperature, for internal_gains
 	double Tcontrol;
 	
 	// Heat pump water heater update
@@ -274,31 +268,12 @@ public:
 
 public:
 	// Tank physical parameters
-	double sensor_position[2];									//sensor_pos
-	double heater_element_power[2];						//heater_q
-	double heater_size[2];											//heater_size
-	double heater_element_position[2];						//heater_pos
-	double upper_element_activation_temp_offset;		//upper_elem_off
-	double compressor_power_capacity;					//comp_power
-	double compressor_activation_temp_offset;			// comp_off
 	double tank_heat_loss_rate;									//heat_loss_rate
-	double upper_fraction;											//upperf
-	double lower_fraction;											//lowerf
 
 	// Water_related_parameters
 	double thermal_conductivity;		//water_k0
-	double convective_coefficient;		//water_alpha
-	double water_heat_capacity;			//water_cv
-	double water_density;					//water_rho
 
 	// Simulation parameters
-	double lowest_ambient_temperature_limit;	//low_amb_lim
-	double highest_ambient_temperature_limit;	//up_amb_lim
-	double lowest_water_temperature_limit;		//water_low_lim
-	double activation_temperature_offset;			//mode_3_off
-	double ambient_air_dry_bulb_temp;				//t_db
-	double ambient_air_wet_bulb_temp;				//t_wb
-	double temp_set[2];										//temp_set
 	int coarse_tank_grid;								//large_bins
 	int fine_tank_grid;									//small_bins
 	int ncomp;
@@ -406,6 +381,8 @@ public:
 	~waterheater(void);
 	int create();
 	int init(OBJECT *parent);
+	int checkpoint_init(OBJECT *parent);
+	void shared_init(void);
 	int isa(char *classname);
 	void thermostat(TIMESTAMP t0, TIMESTAMP t1);					// Thermostat plc control code - determines whether to heat...
 	TIMESTAMP presync(TIMESTAMP t0, TIMESTAMP t1);

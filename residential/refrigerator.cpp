@@ -130,6 +130,20 @@ refrigerator::refrigerator(MODULE *module) : residential_enduse(module)
 				PT_KEYWORD,"COMPRESSSOR_OFF_NORMAL",(enumeration)RS_COMPRESSSOR_OFF_NORMAL,
 				PT_KEYWORD,"COMPRESSSOR_ON_LONG",(enumeration)RS_COMPRESSSOR_ON_LONG,
 				PT_KEYWORD,"COMPRESSSOR_ON_NORMAL",(enumeration)RS_COMPRESSSOR_ON_NORMAL,
+			PT_bool,"check_icemaking",PADDR(check_icemaking), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for icemaker checking",
+			PT_double,"return_time",PADDR(return_time), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for return time",
+			PT_int32,"door_return_time",PADDR(door_return_time), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for door return time",
+			PT_timestamp,"start_time",PADDR(start_time), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for start time",
+			PT_bool,"check_defrost",PADDR(check_defrost), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for defrost checking",
+			PT_double,"no_of_defrost",PADDR(no_of_defrost), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for number of defrosts",
+			PT_int32,"hourly_door_opening",PADDR(hourly_door_opening), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for hourly door opening",
+			PT_int32,"door_next_open_time",PADDR(door_next_open_time), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for door next open time",
+			PT_int32,"door_time",PADDR(door_time), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for door time",
+			PT_bool,"door_open",PADDR(door_open), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for door open",
+			PT_bool,"door_to_open",PADDR(door_to_open), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for door to open",
+			PT_bool,"door_energy_calc",PADDR(door_energy_calc), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for door energy calculation",
+			PT_double,"total_compressor_time",PADDR(total_compressor_time), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for total compressor time",
+			PT_bool,"new_running_state",PADDR(new_running_state), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for new running state",
 			nullptr) < 1)
 			GL_THROW("unable to publish properties in %s", __FILE__);
 	}
@@ -148,13 +162,46 @@ int refrigerator::create()
 	load.power_fraction = 1;
 	is_240 = true;	
 
-	gl_warning("explicit %s model is experimental", OBJECTHDR(this)->oclass->name);
+	gl_warning("explicit %s model is experimental", object_header(this)->oclass->name);
 	/* TROUBLESHOOT
 		The refrigerator explicit model has some serious issues and should be considered for complete
 		removal.  It is highly suggested that this model NOT be used.
 	*/
 
 	return res;
+}
+
+/** Shared initialization for both normal init and checkpoint restore
+ **/
+void refrigerator::shared_init(void)
+{
+	OBJECT *parent = object_header(this)->parent;
+	OBJECT *hdr = object_header(this);
+	
+	// Initialize pointer to parent properties
+	pTout = (double*)gl_get_addr(parent, "air_temperature");
+	if (pTout==nullptr)
+	{
+		static double default_air_temperature = 72;
+		gl_warning("%s (%s:%d) parent object lacks air temperature, using %0f degF instead", hdr->name, hdr->oclass->name, hdr->id, default_air_temperature);
+		pTout = &default_air_temperature;
+	}
+}
+
+/** Called when restoring from checkpoint to reinitialize non-published variables
+ **/
+int refrigerator::checkpoint_init(OBJECT *parent)
+{
+	if(parent != nullptr){
+		if((parent->flags & OF_INIT) != OF_INIT){
+			char objname[256];
+			gl_verbose("refrigerator::init(): deferring initialization on %s", gl_name(parent, objname, 255));
+			return 2; // defer
+		}
+	}
+
+	shared_init();
+	return residential_enduse::checkpoint_init(parent);
 }
 
 int refrigerator::init(OBJECT *parent)
@@ -167,7 +214,7 @@ int refrigerator::init(OBJECT *parent)
 			return 2; // defer
 		}
 	}
-	OBJECT *hdr = OBJECTHDR(this);
+	OBJECT *hdr = object_header(this);
 	hdr->flags |= OF_SKIPSAFE;
 
 	// defaults for unset values */
@@ -175,25 +222,13 @@ int refrigerator::init(OBJECT *parent)
 	if (thermostat_deadband==0) thermostat_deadband = gl_random_uniform(&hdr->rng_state,2,3);
 	if (Tset==0)				Tset = gl_random_uniform(&hdr->rng_state,35,39);
 	if (UA == 0)				UA = 0.6;
-	if (UAr==0)					UAr = UA+size/40*gl_random_uniform(&hdr->rng_state,0.9,1.1);
-	if (UAf==0)					UAf = gl_random_uniform(&hdr->rng_state,0.9,1.1);
-	if (COPcoef==0)				COPcoef = gl_random_uniform(&hdr->rng_state,0.9,1.1);
-	if (Tout==0)				Tout = 59.0;
 	if (load.power_factor==0)		load.power_factor = 0.95;
 
-	pTout = (double*)gl_get_addr(parent, "air_temperature");
-	if (pTout==nullptr)
-	{
-		static double default_air_temperature = 72;
-		gl_warning("%s (%s:%d) parent object lacks air temperature, using %0f degF instead", hdr->name, hdr->oclass->name, hdr->id, default_air_temperature);
-		pTout = &default_air_temperature;
-	}
+	// Initialize pointers and other non-published variables
+	shared_init();
 
 	/* derived values */
 	Tair = gl_random_uniform(&hdr->rng_state,Tset-thermostat_deadband/2, Tset+thermostat_deadband/2);
-
-	// size is used to couple Cw and Qrated
-	Cf = size/10.0 * RHOWATER * CWATER;  // cf * lb/cf * BTU/lb/degF = BTU / degF
 
 	rated_capacity = BTUPHPW * size*10; // BTU/h ... 10 BTU.h / cf (34W/cf, so ~700 for a full-sized refrigerator)
 
@@ -240,8 +275,6 @@ int refrigerator::init(OBJECT *parent)
 	long_compressor_cycle_due=false;
 	door_energy_calc = false;
 
-	ice_making_time = new double[1,2,3]; 
-
 	icemaker_running = false;
 	check_defrost = false;
 
@@ -279,12 +312,11 @@ int refrigerator::isa(char *classname)
 
 TIMESTAMP refrigerator::presync(TIMESTAMP t0, TIMESTAMP t1){
 
-	OBJECT *hdr = OBJECTHDR(this);
+	OBJECT *hdr = object_header(this);
 
 	if(start_time==0)
 	{
 		start_time = int32(t0);
-		DO_random_opening = int32(gl_random_uniform(&hdr->rng_state,0,1800));
 	}	
 
 	return TS_NEVER;
@@ -323,7 +355,7 @@ TIMESTAMP refrigerator::postsync(TIMESTAMP t0, TIMESTAMP t1){
 
 double refrigerator::update_refrigerator_state(double dt0,TIMESTAMP t1)
 {
-	OBJECT *hdr = OBJECTHDR(this);
+	OBJECT *hdr = object_header(this);
 	
 	// accumulate the energy
 	energy_used += refrigerator_power*dt0;
@@ -666,8 +698,6 @@ double refrigerator::update_refrigerator_state(double dt0,TIMESTAMP t1)
 
 				icemaker_running = true;
 
-			//	ice_making_no = gl_random_sampled(3,ice_making_time);
-
 				ice_making_no = 1;
 
 				posted_power += icemaking_power;
@@ -751,9 +781,6 @@ double refrigerator::update_refrigerator_state(double dt0,TIMESTAMP t1)
 
 
 	load.total = load.power + load.current + load.admittance;
-	total_power = (load.power.Re() + (load.current.Re() + load.admittance.Re()*load.voltage_factor)*load.voltage_factor);
-
-	last_dr_mode = dr_mode;
 
 	if ((dt1 > 0) && (dt1 < 1)){
 		dt1 = 1;
@@ -773,7 +800,7 @@ EXPORT int create_refrigerator(OBJECT **obj, OBJECT *parent)
 	*obj = gl_create_object(refrigerator::oclass);
 	if (*obj!=nullptr)
 	{
-		refrigerator *my = OBJECTDATA(*obj,refrigerator);;
+		refrigerator *my = object_data<refrigerator>(*obj);;
 		gl_set_parent(*obj,parent);
 		my->create();
 		return 1;
@@ -783,7 +810,7 @@ EXPORT int create_refrigerator(OBJECT **obj, OBJECT *parent)
 
 EXPORT TIMESTAMP sync_refrigerator(OBJECT *obj, TIMESTAMP t0, PASSCONFIG pass,  TIMESTAMP t1)
 {
-	refrigerator *my = OBJECTDATA(obj,refrigerator);
+	refrigerator *my = object_data<refrigerator>(obj);
 	TIMESTAMP next_time = TS_NEVER;
 
 	// obj->clock = 0 is legit
@@ -827,17 +854,22 @@ EXPORT TIMESTAMP sync_refrigerator(OBJECT *obj, TIMESTAMP t0, PASSCONFIG pass,  
 
 EXPORT int init_refrigerator(OBJECT *obj)
 {
-	refrigerator *my = OBJECTDATA(obj,refrigerator);
+	refrigerator *my = object_data<refrigerator>(obj);
 	return my->init(obj->parent);
 }
 
 EXPORT int isa_refrigerator(OBJECT *obj, char *classname)
 {
 	if(obj != 0 && classname != 0){
-		return OBJECTDATA(obj,refrigerator)->isa(classname);
+		return object_data<refrigerator>(obj)->isa(classname);
 	} else {
 		return 0;
 	}
+}
+
+EXPORT int checkpoint_init_refrigerator(OBJECT *obj)
+{
+	return object_data<refrigerator>(obj)->checkpoint_init(obj->parent);
 }
 
 /*	determine if we're turning the motor on or off and nothing else. */
@@ -845,7 +877,7 @@ EXPORT TIMESTAMP plc_refrigerator(OBJECT *obj, TIMESTAMP t0)
 {
 	// this will be disabled if a PLC object is attached to the refrigerator
 
-	refrigerator *my = OBJECTDATA(obj,refrigerator);
+	refrigerator *my = object_data<refrigerator>(obj);
 	my->thermostat(obj->clock, t0);
 
 	return TS_NEVER;  

@@ -38,7 +38,7 @@ microwave::microwave(MODULE *module) : residential_enduse(module)
 		// publish the class properties
 		if (gl_publish_variable(oclass,
 			PT_INHERIT, "residential_enduse",
-			PT_double,"installed_power[kW]",PADDR(shape.params.analog.power),PT_DESCRIPTION,"rated microwave power level",
+			PT_double,"installed_power[kW]",PADDR(shape.params.analog.power),PT_DESCRIPTION,"rated microwave power level",			
 			PT_double,"standby_power[kW]",PADDR(standby_power),PT_DESCRIPTION,"standby microwave power draw (unshaped only)",
 			PT_double,"circuit_split",PADDR(circuit_split),
 			PT_enumeration,"state",PADDR(state),PT_DESCRIPTION,"on/off state of the microwave",
@@ -48,6 +48,7 @@ microwave::microwave(MODULE *module) : residential_enduse(module)
 			PT_double,"cycle_length[s]",PADDR(cycle_time),PT_DESCRIPTION,"length of the combined on/off cycle between uses",
 			PT_double,"runtime[s]",PADDR(runtime),PT_DESCRIPTION,"",
 			PT_double,"state_time[s]",PADDR(state_time),PT_DESCRIPTION,"",
+			PT_double,"prev_demand",PADDR(prev_demand), PT_ACCESS, PA_HIDDEN, PT_DESCRIPTION, "CHECKPOINT_VAR: internal variable for previous demand",
 			nullptr)<1)
 			GL_THROW("unable to publish properties in %s",__FILE__);
 	}
@@ -71,7 +72,7 @@ int microwave::create()
 	standby_power = 0.01;
 	shape.load = gl_random_uniform(RNGSTATE,0, 0.1);  // assuming a default maximum 10% of the sync time 
 
-	gl_warning("explicit %s model is experimental", OBJECTHDR(this)->oclass->name);
+	gl_warning("explicit %s model is experimental", object_header(this)->oclass->name);
 
 	return res;
 }
@@ -103,7 +104,16 @@ void microwave::init_noshape(){
 	}
 }
 
-int microwave::init(OBJECT *parent)
+void microwave::shared_init(void)
+{
+	// These variables need initialized every time regardless of checkpoint load
+	// Non-published variables (not loaded from checkpoint) must be initialized here
+	cycle_start = 0;
+	cycle_on = 0;
+	cycle_off = 0;
+}
+
+int microwave::checkpoint_init(OBJECT *parent)
 {
 	if(parent != nullptr){
 		if((parent->flags & OF_INIT) != OF_INIT){
@@ -111,8 +121,25 @@ int microwave::init(OBJECT *parent)
 			gl_verbose("microwave::init(): deferring initialization on %s", gl_name(parent, objname, 255));
 			return 2; // defer
 		}
+	}	
+	// Only initialize variables that aren't published.  If a variable is published, it will be loaded from checkpoint, and we don't want to reinitialize it.
+	shared_init();
+	return residential_enduse::checkpoint_init(parent);
+}
+
+int microwave::init(OBJECT *parent)
+{
+	// Initialize non-published variables
+	shared_init();
+	
+	if(parent != nullptr){
+		if((parent->flags & OF_INIT) != OF_INIT){
+			char objname[256];
+			gl_verbose("microwave::init(): deferring initialization on %s", gl_name(parent, objname, 255));
+			return 2; // defer
+		}
 	}
-	OBJECT *hdr = OBJECTHDR(this);
+	OBJECT *hdr = object_header(this);
 	hdr->flags |= OF_SKIPSAFE;
 
 	if (load.voltage_factor==0) load.voltage_factor = 1.0;
@@ -323,7 +350,7 @@ EXPORT int create_microwave(OBJECT **obj, OBJECT *parent)
 		*obj = gl_create_object(microwave::oclass);
 		if (*obj!=nullptr)
 		{
-			microwave *my = OBJECTDATA(*obj,microwave);;
+			microwave *my = object_data<microwave>(*obj);
 			gl_set_parent(*obj,parent);
 			my->create();
 			return 1;
@@ -338,7 +365,7 @@ EXPORT int create_microwave(OBJECT **obj, OBJECT *parent)
 EXPORT int init_microwave(OBJECT *obj)
 {
 	try {
-		microwave *my = OBJECTDATA(obj,microwave);
+		microwave *my = object_data<microwave>(obj);
 		return my->init(obj->parent);
 	}
 	INIT_CATCHALL(microwave);
@@ -347,16 +374,22 @@ EXPORT int init_microwave(OBJECT *obj)
 EXPORT int isa_microwave(OBJECT *obj, char *classname)
 {
 	if(obj != 0 && classname != 0){
-		return OBJECTDATA(obj,microwave)->isa(classname);
+		return object_data<microwave>(obj)->isa(classname);
 	} else {
 		return 0;
 	}
 }
 
+EXPORT int checkpoint_init_microwave(OBJECT *obj)
+{
+	microwave *my = object_data<microwave>(obj);
+	return my->checkpoint_init(obj->parent);
+}
+
 EXPORT TIMESTAMP sync_microwave(OBJECT *obj, TIMESTAMP t0)
 {
 	try {
-		microwave *my = OBJECTDATA(obj, microwave);
+		microwave *my = object_data<microwave>(obj);
 		TIMESTAMP t2 = my->sync(obj->clock, t0);
 		obj->clock = t0;
 		return t2;

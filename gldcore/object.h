@@ -106,7 +106,8 @@ typedef struct s_forecast
 	int32 timestep;								/**< number of seconds per forecast timestep */
 	double *values;								/**< values of the forecast (nullptr if no forecast) */
 	TIMESTAMP (*external)(void *obj, void *fc); /**< external forecast update call */
-	struct s_forecast *next;					/**< next forecast data block (nullptr for last) */
+	struct s_forecast *next;
+	unsigned int lock;							/**< forecast lock */
 } FORECAST;										/**< Forecast data block */
 
 typedef enum

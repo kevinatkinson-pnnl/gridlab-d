@@ -1685,102 +1685,111 @@ void object_profile(OBJECT *obj, OBJECTPROFILEITEM pass, clock_t t)
 	}
 }
 
-TIMESTAMP _object_sync(OBJECT *obj,		/**< the object to synchronize */
-					   TIMESTAMP ts,	/**< the desire clock to sync to */
-					   PASSCONFIG pass) /**< the pass configuration */
+TIMESTAMP _object_sync(OBJECT *obj,      /**< the object to synchronize */
+                       TIMESTAMP ts,     /**< the desire clock to sync to */
+                       PASSCONFIG pass)  /**< the pass configuration */
 {
-	CLASS *oclass = obj->oclass;
-	TIMESTAMP plc_time = TS_NEVER, sync_time;
-	TIMESTAMP effective_valid_to = std::min(obj->clock + global_skipsafe, obj->valid_to);
-	int autolock = obj->oclass->passconfig & PC_AUTOLOCK;
+    CLASS *oclass = obj->oclass;
+    TIMESTAMP plc_time = TS_NEVER, sync_time;
+    TIMESTAMP effective_valid_to = std::min(obj->clock + global_skipsafe, obj->valid_to);
+    int autolock = obj->oclass->passconfig & PC_AUTOLOCK;
 
-	/* check skipsafe */
-	if (global_skipsafe > 0 && (obj->flags & OF_SKIPSAFE) && ts < effective_valid_to)
+    /* check skipsafe */
+    if (global_skipsafe > 0 && (obj->flags & OF_SKIPSAFE) && ts < effective_valid_to)
+        return effective_valid_to;
 
-		/* return valid_to time if skipping */
-		return effective_valid_to;
-
-	/* check sync */
-	if (oclass->sync == nullptr)
-	{
-		char buffer[64];
-		char buffer2[64];
-		char *passname = const_cast<char *>(pass == PC_PRETOPDOWN ? "PC_PRETOPDOWN" : (pass == PC_BOTTOMUP ? "PC_BOTTOMUP" : (pass == PC_POSTTOPDOWN ? "PC_POSTTOPDOWN" : "<unknown>")));
-		output_fatal("object_sync(OBJECT *obj='%s', TIMESTAMP ts='%s', PASSCONFIG pass=%s): int64 sync_%s(OBJECT*,TIMESTAMP,PASSCONFIG) is not implemented in module %s", object_name(obj, buffer2, 63), convert_from_timestamp(ts, buffer, sizeof(buffer)) ? buffer : "<invalid>", passname, oclass->name, oclass->module->name);
-		/*	TROUBLESHOOT
-			The indicated sync function is not implemented by the class given.
-			This happens when the PASSCONFIG flag indicates a particular sync
-			(presync/sync/postsync) needs to be called, but the class does not
-			actually implement it.  This is a problem with the module that
-			implements the class.
-		 */
-		return TS_INVALID;
-	}
-
-#if !defined(WIN32) && defined(HAVE_ALARM)
-	/* setup lockup alarm */
-	alarm(global_maximum_synctime);
-#endif
-
-	/* call recalc if recalc bit is set */
-	if ((obj->flags & OF_RECALC) && obj->oclass->recalc != nullptr)
-	{
-		if (autolock)
-		{
-			// wlock(&obj->lock);
-			// replace the above with SharedMutexManager
-			std::unique_lock<std::shared_mutex> lock(SharedMutexManager::get_mutex(&obj->lock));
-			oclass->recalc(obj);
-			// if (autolock) wunlock(&obj->lock);
-		}
-		else
-			oclass->recalc(obj);
-
-		obj->flags &= ~OF_RECALC;
-	}
-
-	/* call PLC code on bottom-up, if any */
-	if (!(obj->flags & OF_HASPLC) && oclass->plc != nullptr && pass == PC_BOTTOMUP)
-	{
-		if (autolock)
-		{
-			// wlock(&obj->lock);
-			std::unique_lock<std::shared_mutex> lock(SharedMutexManager::get_mutex(&obj->lock));
-			plc_time = oclass->plc(obj, ts);
-		}
-		else
-			plc_time = oclass->plc(obj, ts);
-
-		// if (autolock) wunlock(&obj->lock);
-	}
-
-	/* call sync */
-	if (autolock)
-	{
-		// wlock(&obj->lock);
-		std::unique_lock<std::shared_mutex> lock(SharedMutexManager::get_mutex(&obj->lock));
-		sync_time = (*obj->oclass->sync)(obj, ts, pass);
-		// if (autolock) wunlock(&obj->lock);
-	}
-	else
-	{
-		sync_time = (*obj->oclass->sync)(obj, ts, pass);
-	}
-	if (absolute_timestamp(plc_time) < absolute_timestamp(sync_time))
-		sync_time = plc_time;
-
-	/* compute valid_to time */
-	if (sync_time > TS_MAX)
-		obj->valid_to = TS_NEVER;
-	else
-		obj->valid_to = sync_time; // NOTE, this can be negative
+    /* check sync */
+    if (oclass->sync == nullptr)
+    {
+        char buffer[64];
+        char buffer2[64];
+        char *passname = const_cast<char *>(
+            pass == PC_PRETOPDOWN   ? "PC_PRETOPDOWN"
+            : (pass == PC_BOTTOMUP  ? "PC_BOTTOMUP"
+            : (pass == PC_POSTTOPDOWN ? "PC_POSTTOPDOWN"
+            : "<unknown>")));
+        output_fatal(
+            "object_sync(OBJECT *obj='%s', TIMESTAMP ts='%s', PASSCONFIG pass=%s): "
+            "int64 sync_%s(OBJECT*,TIMESTAMP,PASSCONFIG) is not implemented in module %s",
+            object_name(obj, buffer2, 63),
+            convert_from_timestamp(ts, buffer, sizeof(buffer)) ? buffer : "<invalid>",
+            passname, oclass->name, oclass->module->name);
+        return TS_INVALID;
+    }
 
 #if !defined(WIN32) && defined(HAVE_ALARM)
-	/* clear lockup alarm */
-	alarm(0);
+    /* setup lockup alarm */
+    alarm(global_maximum_synctime);
 #endif
 
-	return obj->valid_to;
+    /* call recalc if recalc bit is set */
+    if ((obj->flags & OF_RECALC) && obj->oclass->recalc != nullptr)
+    {
+        if (autolock)
+        {
+            std::unique_lock<std::shared_mutex> lock_obj(SharedMutexManager::get_mutex(&obj->lock));
+            std::unique_lock<std::shared_mutex> lock_parent;
+            if (obj->parent != nullptr && obj->parent != obj)
+                lock_parent = std::unique_lock<std::shared_mutex>(SharedMutexManager::get_mutex(&obj->parent->lock));
+
+            oclass->recalc(obj);
+            obj->flags &= ~OF_RECALC;
+        }
+        else
+        {
+            oclass->recalc(obj);
+            obj->flags &= ~OF_RECALC;
+        }
+    }
+
+    /* call PLC code on bottom-up, if any */
+    if (!(obj->flags & OF_HASPLC) && oclass->plc != nullptr && pass == PC_BOTTOMUP)
+    {
+        if (autolock)
+        {
+            std::unique_lock<std::shared_mutex> lock_obj(SharedMutexManager::get_mutex(&obj->lock));
+            std::unique_lock<std::shared_mutex> lock_parent;
+            if (obj->parent != nullptr && obj->parent != obj)
+                lock_parent = std::unique_lock<std::shared_mutex>(SharedMutexManager::get_mutex(&obj->parent->lock));
+
+            plc_time = oclass->plc(obj, ts);
+        }
+        else
+        {
+            plc_time = oclass->plc(obj, ts);
+        }
+    }
+
+    /* call sync */
+    if (autolock)
+    {
+        std::unique_lock<std::shared_mutex> lock_obj(SharedMutexManager::get_mutex(&obj->lock));
+        std::unique_lock<std::shared_mutex> lock_parent;
+        if (obj->parent != nullptr && obj->parent != obj)
+            lock_parent = std::unique_lock<std::shared_mutex>(SharedMutexManager::get_mutex(&obj->parent->lock));
+
+        sync_time = (*obj->oclass->sync)(obj, ts, pass);
+    }
+    else
+    {
+        sync_time = (*obj->oclass->sync)(obj, ts, pass);
+    }
+
+    if (absolute_timestamp(plc_time) < absolute_timestamp(sync_time))
+        sync_time = plc_time;
+
+    /* compute valid_to time */
+    if (sync_time > TS_MAX)
+        obj->valid_to = TS_NEVER;
+    else
+        obj->valid_to = sync_time; // NOTE, this can be negative
+
+#if !defined(WIN32) && defined(HAVE_ALARM)
+    /* clear lockup alarm */
+    alarm(0);
+#endif
+
+    return obj->valid_to;
 }
 /** Synchronize an object.  The timestamp given is the desired increment.
 

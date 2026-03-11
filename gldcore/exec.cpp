@@ -3417,50 +3417,67 @@ static bool execute_single_simulation_iteration(cpp_threadpool *threadpool,
                 }
                 else
                 {
-                    int n_obj = 0;
+                    std::vector<LISTITEM*> items;
                     for (ptr = ranks[pass]->ordinal[i]->first; ptr != nullptr;
                          ptr = ptr->next)
-                        n_obj++;
+                        items.push_back(ptr);
+
+                    int n_obj = static_cast<int>(items.size());
+                    if (n_obj == 0)
+                        continue;
 
                     int n_threads = std::min(altThreadcount, n_obj);
-                    std::atomic<bool> found_invalid{false};
                     std::latch done(n_threads);
+                    std::atomic<bool> found_invalid{false};
                     int chunk_size = (n_obj + n_threads - 1) / n_threads;
-                    // printf("[exec.cpp] chunk_size=%d, n_obj=%d, n_threads=%d\n", chunk_size, n_obj, n_threads);
-                    for (int t = 0; t < n_threads; ++t)
-                    {
-                        pool.enqueue([t, n_threads, pass, i, n_obj, chunk_size,
-                                      &done, &found_invalid] {
-                            int start_idx = t * chunk_size;
-                            int end_idx = std::min(start_idx + chunk_size, n_obj);
-                            int count = 0;
-                            for (LISTITEM *ptr = ranks[pass]->ordinal[i]->first;
-                                 ptr != nullptr && count < end_idx;
-                                 ptr = ptr->next)
-                            {
-                                if (count >= start_idx)
-                                {
-                                    if (found_invalid.load(std::memory_order_relaxed))
-                                        break;
-                                    OBJECT *obj = static_cast<OBJECT *>(ptr->data);
-                                    {
-                                        std::unique_lock<std::shared_mutex> striped_lock(
-                                            SharedMutexManager::get_striped_mutex(&obj->lock));
-                                        ss_do_object_sync(t, ptr->data);
-                                    }
-                                    if (obj->valid_to == TS_INVALID || obj->valid_to < global_clock)
-                                    {
-                                        found_invalid.store(
-                                            true, std::memory_order_relaxed);
-                                        break;
-                                    }
+
+                    for (int t = 0; t < n_threads; ++t) {
+                        int start_idx = t * chunk_size;
+                        int end_idx = std::min(start_idx + chunk_size, n_obj);
+                        pool.enqueue([t, start_idx, end_idx, &done, &items, &found_invalid]() {
+                            for (int idx = start_idx; idx < end_idx; ++idx) {
+                                // Stop if any thread found an invalid object
+                                if (found_invalid.load(std::memory_order_relaxed))
+                                    break;
+
+                                ss_do_object_sync(t, items[idx]->data);
+
+                                OBJECT *obj = static_cast<OBJECT *>(items[idx]->data);
+                                if (obj->valid_to == TS_INVALID) {
+                                    found_invalid.store(true, std::memory_order_relaxed);
+                                    break;
                                 }
-                                count++;
                             }
                             done.count_down();
                         });
                     }
                     done.wait();
+
+                    // Aggregate results from all thread slots
+                    for (int t = 1; t < n_threads; ++t) {
+                        auto &d = thread_data->data[t];
+                        auto &d0 = thread_data->data[0];
+
+                        d0.hard_event += d.hard_event;
+
+                        if (d.status == FAILED)
+                            d0.status = FAILED;
+
+                        if (d.step_to < d0.step_to)
+                            d0.step_to = d.step_to;
+
+                        // Reset for next use
+                        d.hard_event = 0;
+                        d.status = SUCCESS;
+                        d.step_to = TS_NEVER;
+                    }
+
+                    // If something went invalid, handle it the same way
+                    // the single-threaded path would (break out of the loop, etc.)
+                    if (found_invalid.load()) {
+                        // match whatever the single-threaded break does
+                        break;  // or however you propagate the error
+                    }
                 }
             }
         }

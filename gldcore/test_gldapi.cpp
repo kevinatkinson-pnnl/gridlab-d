@@ -26,11 +26,12 @@ int main(int argc, char* argv[]) {
     std::string fileName = argv[1];
     GridLabD gld;
     
-    // Parse flags
+    // Parse flags; collect unknown args to forward to gridlabd (e.g. --object_threads 4)
     bool checkpoint_mode = false;
     bool restore_mode = false;
     int num_steps = 2;
-    
+    std::vector<std::string> extra_gld_args;
+
     for (int i = 2; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--checkpoint") {
@@ -39,24 +40,31 @@ int main(int argc, char* argv[]) {
             restore_mode = true;
         } else if (arg == "--steps" && i + 1 < argc) {
             num_steps = std::stoi(argv[++i]);
+        } else {
+            extra_gld_args.push_back(arg);
         }
     }
-    
-    // Load GLM file
+
+    // Load GLM/JSON file
     if(restore_mode) {
         fileName = get_base_filename(fileName) + "_checkpoint.json";
     }
-    std::vector<const char*> args = {fileName.c_str(), "--verbose"};
-    int test_argc = static_cast<int>(args.size());
-    char* test_argv[] = { nullptr, const_cast<char*>(args[0]), const_cast<char*>(args[1])};
+
+    // Build argv: slot 0 = nullptr (program name), slot 1 = fileName, then extra args
+    std::vector<const char*> gld_argv;
+    gld_argv.push_back(nullptr);
+    gld_argv.push_back(fileName.c_str());
+    for (const auto &a : extra_gld_args)
+        gld_argv.push_back(a.c_str());
+    int test_argc = static_cast<int>(gld_argv.size());
+
     try{
-        gld.load_glm(test_argc, test_argv);
+        gld.load_glm(test_argc, const_cast<char**>(gld_argv.data()));
     } catch (const std::exception& e) {
         std::cerr << "Error loading GLM: " << e.what() << std::endl;
         return 1;
     }
 
-    
     if (checkpoint_mode) {
         // Run N steps and save checkpoint
         double sim_time;
@@ -68,7 +76,7 @@ int main(int argc, char* argv[]) {
         // Get checkpoint and save it
         nlohmann::json checkpoint = gld.get_checkpoint_json();
         printf("Checkpoint saved.\n");
-    } 
+    }
     else if (restore_mode) {
         printf("Checkpoint loaded.\n");
         std::cout << gld.gld_model.dump(4) << std::endl; // Pretty print with 4-space indent

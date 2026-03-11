@@ -52,11 +52,16 @@ typedef struct s_aggregate AGGREGATION;
 class SharedMutexManager
 {
 private:
-	// Use a function-local static to ensure single instance
-	static std::shared_mutex &get_registry_mutex()
+	static constexpr size_t NUM_STRIPES = 8192;
+
+	struct Stripe {
+		alignas(64) std::shared_mutex mutex;
+	};
+
+	static Stripe* get_stripes()
 	{
-		static std::shared_mutex mutex;
-		return mutex;
+		static Stripe stripes[NUM_STRIPES];
+		return stripes;
 	}
 
 	static std::unordered_map<void *, std::shared_mutex> &get_instance_mutexes()
@@ -65,14 +70,24 @@ private:
 		return mutexes;
 	}
 
-public:
-	static std::shared_mutex &get_mutex(void *instance_ptr)
+	static std::shared_mutex &get_per_object_mutex(void *instance_ptr)
 	{
-		std::unique_lock<std::shared_mutex> registry_lock(get_registry_mutex());
-
 		auto &instance_mutexes = get_instance_mutexes();
 		auto [iter, inserted] = instance_mutexes.try_emplace(instance_ptr);
 		return iter->second;
+	}
+
+public:
+	// Per-object mutex for full isolation (restore original get_mutex)
+	static std::shared_mutex &get_mutex(void *instance_ptr)
+	{
+		return get_per_object_mutex(instance_ptr);
+	}
+	// Striped (fast, possibly colliding) mutex for high-throughput scenarios
+	static std::shared_mutex &get_striped_mutex(void *instance_ptr)
+	{
+		size_t hash = std::hash<void*>{}(instance_ptr);
+		return get_stripes()[hash % NUM_STRIPES].mutex;
 	}
 };
 

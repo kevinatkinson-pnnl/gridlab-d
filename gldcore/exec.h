@@ -31,10 +31,8 @@ struct sync_data {
 }; /**< the synchronization state structure */
 
 struct thread_data {
-  int count; /**< the thread count */
-  // struct sync_data *data; /**< pointer to the sync state structure */
-  std::vector<std::shared_ptr<struct sync_data>>
-      data; /**< pointer to the sync state structure */
+  std::vector<struct sync_data>
+      data; /**< per-thread sync state, indexed by thread slot 0..altThreadcount-1 */
 };
 
 class threadpool_thread_data {

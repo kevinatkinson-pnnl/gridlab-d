@@ -26,7 +26,7 @@ int main(int argc, char* argv[]) {
     std::string fileName = argv[1];
     GridLabD gld;
     
-    // Parse flags; collect unknown args to forward to gridlabd (e.g. --object_threads 4)
+    // Parse flags
     bool checkpoint_mode = false;
     bool restore_mode = false;
     int num_steps = 2;

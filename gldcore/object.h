@@ -52,18 +52,6 @@ typedef struct s_aggregate AGGREGATION;
 class SharedMutexManager
 {
 private:
-	static constexpr size_t NUM_STRIPES = 8192;
-
-	struct Stripe {
-		alignas(64) std::shared_mutex mutex;
-	};
-
-	static Stripe* get_stripes()
-	{
-		static Stripe stripes[NUM_STRIPES];
-		return stripes;
-	}
-
 	static std::unordered_map<void *, std::shared_mutex> &get_instance_mutexes()
 	{
 		static std::unordered_map<void *, std::shared_mutex> mutexes;
@@ -83,12 +71,6 @@ public:
 	{
 		return get_per_object_mutex(instance_ptr);
 	}
-	// Striped (fast, possibly colliding) mutex for high-throughput scenarios
-	static std::shared_mutex &get_striped_mutex(void *instance_ptr)
-	{
-		size_t hash = std::hash<void*>{}(instance_ptr);
-		return get_stripes()[hash % NUM_STRIPES].mutex;
-	}
 };
 
 typedef struct s_namespace
@@ -107,7 +89,6 @@ typedef struct s_forecast
 	double *values;								/**< values of the forecast (nullptr if no forecast) */
 	TIMESTAMP (*external)(void *obj, void *fc); /**< external forecast update call */
 	struct s_forecast *next;
-	unsigned int lock;							/**< forecast lock */
 } FORECAST;										/**< Forecast data block */
 
 typedef enum

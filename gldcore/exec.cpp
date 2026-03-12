@@ -335,7 +335,7 @@ struct arg_data
 };
 struct arg_data arg_data_array[2];
 
-int altThreadcount = 3;
+int altThreadcount = 2;
 
 INDEX **exec_getranks() { return ranks; }
 
@@ -1041,9 +1041,8 @@ private:
     bool stop = false;
 };
 
-static void ss_do_object_sync(int thread, void *item)
+static void ss_do_object_sync(struct sync_data &data, void *item)
 {
-    struct sync_data &data = thread_data->data[thread];
     OBJECT *obj = (OBJECT *)item;
     TIMESTAMP this_t;
     char b[64];
@@ -1183,13 +1182,10 @@ static void ss_do_object_sync(int thread, void *item)
                      global_minimum_timestep;
 
         /* if this event precedes next step, next step is now this event */
+        // Each call to ss_do_object_sync owns its sync_data slot exclusively
+        // (one task per slot, no sharing), so no lock is needed here.
         if (data.step_to > this_t)
-        {
-            static std::mutex step_mutex;
-            std::lock_guard<std::mutex> lock(step_mutex);
-            if (data.step_to > this_t)
-                data.step_to = this_t;
-        }
+            data.step_to = this_t;
     }
 }
 
@@ -1209,7 +1205,7 @@ static void *ss_do_object_sync_list(void *threadarg)
     {
         if (iPtr < incr)
         {
-            ss_do_object_sync(thread, ptr->data);
+            ss_do_object_sync(thread_data->data[thread], ptr->data);
             iPtr++;
         }
     }
@@ -3349,6 +3345,7 @@ static bool execute_single_simulation_iteration(cpp_threadpool *threadpool,
         {
             thread_data->data[j].hard_event = 0;
             thread_data->data[j].step_to = TS_NEVER;
+            thread_data->data[j].status = SUCCESS;  // must reset status each pass or stale FAILED poisons future iterations
         }
     }
 #ifdef _DEBUG
@@ -3404,7 +3401,7 @@ static bool execute_single_simulation_iteration(cpp_threadpool *threadpool,
                          ptr = ptr->next)
                     {
                         OBJECT *obj = static_cast<OBJECT *>(ptr->data);
-                        ss_do_object_sync(0, ptr->data);
+                        ss_do_object_sync(thread_data->data[0], ptr->data);
 
                         if (obj->valid_to == TS_INVALID)
                         {
@@ -3434,17 +3431,17 @@ static bool execute_single_simulation_iteration(cpp_threadpool *threadpool,
                     for (int t = 0; t < n_threads; ++t) {
                         int start_idx = t * chunk_size;
                         int end_idx = std::min(start_idx + chunk_size, n_obj);
-                        pool.enqueue([t, start_idx, end_idx, &done, &items, &found_invalid]() {
+                        struct sync_data *slot = &thread_data->data[t];
+                        pool.enqueue([slot, start_idx, end_idx, &done, &items, &found_invalid]() {
                             for (int idx = start_idx; idx < end_idx; ++idx) {
-                                // Stop if any thread found an invalid object
-                                if (found_invalid.load(std::memory_order_relaxed))
+                                if (found_invalid.load(std::memory_order_acquire))
                                     break;
 
-                                ss_do_object_sync(t, items[idx]->data);
+                                ss_do_object_sync(*slot, items[idx]->data);
 
                                 OBJECT *obj = static_cast<OBJECT *>(items[idx]->data);
                                 if (obj->valid_to == TS_INVALID) {
-                                    found_invalid.store(true, std::memory_order_relaxed);
+                                    found_invalid.store(true, std::memory_order_release);
                                     break;
                                 }
                             }
@@ -3452,31 +3449,23 @@ static bool execute_single_simulation_iteration(cpp_threadpool *threadpool,
                         });
                     }
                     done.wait();
-
-                    // Aggregate results from all thread slots
+  
+                    auto &d0 = thread_data->data[0];
                     for (int t = 1; t < n_threads; ++t) {
                         auto &d = thread_data->data[t];
-                        auto &d0 = thread_data->data[0];
-
                         d0.hard_event += d.hard_event;
-
                         if (d.status == FAILED)
                             d0.status = FAILED;
-
                         if (d.step_to < d0.step_to)
                             d0.step_to = d.step_to;
-
-                        // Reset for next use
+                        // Reset value
                         d.hard_event = 0;
                         d.status = SUCCESS;
                         d.step_to = TS_NEVER;
                     }
 
-                    // If something went invalid, handle it the same way
-                    // the single-threaded path would (break out of the loop, etc.)
-                    if (found_invalid.load()) {
-                        // match whatever the single-threaded break does
-                        break;  // or however you propagate the error
+                    if (found_invalid.load(std::memory_order_acquire)) {
+                        break;
                     }
                 }
             }

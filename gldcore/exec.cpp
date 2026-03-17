@@ -335,7 +335,7 @@ struct arg_data
 };
 struct arg_data arg_data_array[2];
 
-int altThreadcount = 2;
+int altThreadcount = 1;
 
 INDEX **exec_getranks() { return ranks; }
 
@@ -3418,30 +3418,57 @@ static bool execute_single_simulation_iteration(cpp_threadpool *threadpool,
                     for (ptr = ranks[pass]->ordinal[i]->first; ptr != nullptr;
                          ptr = ptr->next)
                         items.push_back(ptr);
-
                     int n_obj = static_cast<int>(items.size());
                     if (n_obj == 0)
                         continue;
 
                     int n_threads = std::min(altThreadcount, n_obj);
-                    std::latch done(n_threads);
+
+                    // ── Group objects by parent to avoid parent-lock contention ──
+                    std::vector<std::vector<int>> groups(n_threads);
+                    for (int idx = 0; idx < n_obj; ++idx) {
+                        OBJECT *obj = static_cast<OBJECT *>(items[idx]->data);
+                        int tid;
+                        if (obj->parent != nullptr) {
+                            auto h = std::hash<void*>{}(
+                                         static_cast<void*>(obj->parent));
+                            tid = static_cast<int>(h % n_threads);
+                        } else {
+                            tid = idx % n_threads;
+                        }
+                        groups[tid].push_back(idx);
+                    }
+
+                    // Count non-empty groups — only launch threads that have work
+                    int active_threads = 0;
+                    for (int t = 0; t < n_threads; ++t) {
+                        if (!groups[t].empty())
+                            ++active_threads;
+                    }
+                    if (active_threads == 0)
+                        continue;
+
+                    std::latch done(active_threads);
                     std::atomic<bool> found_invalid{false};
-                    int chunk_size = (n_obj + n_threads - 1) / n_threads;
 
                     for (int t = 0; t < n_threads; ++t) {
-                        int start_idx = t * chunk_size;
-                        int end_idx = std::min(start_idx + chunk_size, n_obj);
+                        if (groups[t].empty())
+                            continue;
+
                         struct sync_data *slot = &thread_data->data[t];
-                        pool.enqueue([slot, start_idx, end_idx, &done, &items, &found_invalid]() {
-                            for (int idx = start_idx; idx < end_idx; ++idx) {
+                        // Capture group by value so it outlives this scope
+                        auto group = std::move(groups[t]);
+
+                        pool.enqueue([slot, group = std::move(group),
+                                      &done, &items, &found_invalid]() {
+                            for (int idx : group) {
                                 if (found_invalid.load(std::memory_order_acquire))
                                     break;
-
                                 ss_do_object_sync(*slot, items[idx]->data);
-
                                 OBJECT *obj = static_cast<OBJECT *>(items[idx]->data);
                                 if (obj->valid_to == TS_INVALID) {
-                                    found_invalid.store(true, std::memory_order_release);
+                                    found_invalid.store(true,
+                                        std::memory_order_release);
                                     break;
                                 }
                             }
@@ -3449,7 +3476,7 @@ static bool execute_single_simulation_iteration(cpp_threadpool *threadpool,
                         });
                     }
                     done.wait();
-  
+
                     auto &d0 = thread_data->data[0];
                     for (int t = 1; t < n_threads; ++t) {
                         auto &d = thread_data->data[t];
@@ -3458,12 +3485,10 @@ static bool execute_single_simulation_iteration(cpp_threadpool *threadpool,
                             d0.status = FAILED;
                         if (d.step_to < d0.step_to)
                             d0.step_to = d.step_to;
-                        // Reset value
                         d.hard_event = 0;
                         d.status = SUCCESS;
                         d.step_to = TS_NEVER;
                     }
-
                     if (found_invalid.load(std::memory_order_acquire)) {
                         break;
                     }

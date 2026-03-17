@@ -4,6 +4,7 @@
 
 #define USE_GLSOLVERS
 #include "gridlabd.h"
+#include <mutex>
 
 #ifdef USE_NEWSOLVER
 
@@ -63,24 +64,26 @@ double e2solve(double _a, double _n, double _b, double _m, double _c, double p, 
 
 double e2solve(double a, double n, double b, double m, double c, double p, double *e)
 {
-	// load the solver if not yet loaded
+	// The solver handle and default iteration count are initialised exactly
+	// once, even under concurrent first calls, using call_once.
 	static glsolver *etp = nullptr;
-	static struct etpdata {
-		double t,a,n,b,m,c,p,e;
-		unsigned int i;
-	} data;
-	if ( etp==nullptr )
-	{
+	static unsigned int default_iterations = 100;
+	static std::once_flag init_flag;
+
+	std::call_once(init_flag, [](){
+		struct etpdata { double t,a,n,b,m,c,p,e; unsigned int i; } tmp{};
 		etp = new glsolver("etp");
 		int version;
 		if ( etp->get("version",&version,nullptr)==0 || version!=1 )
-			throw "incorrect ETP solver version";
-		if ( etp->get("init",&data,nullptr)==0 )
-			throw "unable to initialize ETP solver data";
-		data.i = 100;
-	}
+			throw std::runtime_error("incorrect ETP solver version");
+		if ( etp->get("init",&tmp,nullptr)==0 )
+			throw std::runtime_error("unable to initialize ETP solver data");
+		default_iterations = tmp.i;
+	});
 
-	// solve it
+	// Each call gets its own stack-allocated data block so concurrent calls
+	// from different threads never share state.
+	struct etpdata { double t,a,n,b,m,c,p,e; unsigned int i; } data{};
 	data.t = 0;
 	data.a = a;
 	data.b = b;
@@ -88,6 +91,8 @@ double e2solve(double a, double n, double b, double m, double c, double p, doubl
 	data.n = n;
 	data.m = m;
 	data.p = p;
+	data.i = default_iterations;
+
 	if ( etp->solve(&data) )
 	{
 		if ( e!=nullptr )

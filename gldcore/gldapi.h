@@ -112,8 +112,6 @@ public:
   GLDErrorCode set_prestep_callback(GLDCallback callback);
 
   // Validation and testing
-  GLDErrorCode validate(const std::string& repo_root, 
-                        const std::vector<std::string>& modules = {});
   
   // Self-contained API health check (suitable for Python packages)
   GLDErrorCode validate_api(bool verbose = true);

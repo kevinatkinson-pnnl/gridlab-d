@@ -26,6 +26,7 @@
 #include <cstring>
 #include <sys/stat.h>
 
+#include <format>
 #include <mutex>
 #include <atomic>
 #include <vector>
@@ -640,7 +641,7 @@ static counters run_test(char *file, double *elapsed_time = nullptr)
 
     std::string command_line = std::format(
         "\"{}\" -W {} {} {}{}",
-        executable_to_run_path.string(), // Get string representation for formatting
+        executable_to_run_path.string(),
         dir,
         validate_child_cmdargs,
         name,

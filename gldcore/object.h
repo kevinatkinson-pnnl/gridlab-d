@@ -52,27 +52,24 @@ typedef struct s_aggregate AGGREGATION;
 class SharedMutexManager
 {
 private:
-	// Use a function-local static to ensure single instance
-	static std::shared_mutex &get_registry_mutex()
-	{
-		static std::shared_mutex mutex;
-		return mutex;
-	}
-
 	static std::unordered_map<void *, std::shared_mutex> &get_instance_mutexes()
 	{
 		static std::unordered_map<void *, std::shared_mutex> mutexes;
 		return mutexes;
 	}
 
-public:
-	static std::shared_mutex &get_mutex(void *instance_ptr)
+	static std::shared_mutex &get_per_object_mutex(void *instance_ptr)
 	{
-		std::unique_lock<std::shared_mutex> registry_lock(get_registry_mutex());
-
 		auto &instance_mutexes = get_instance_mutexes();
 		auto [iter, inserted] = instance_mutexes.try_emplace(instance_ptr);
 		return iter->second;
+	}
+
+public:
+	// Per-object mutex for full isolation (restore original get_mutex)
+	static std::shared_mutex &get_mutex(void *instance_ptr)
+	{
+		return get_per_object_mutex(instance_ptr);
 	}
 };
 
@@ -91,7 +88,7 @@ typedef struct s_forecast
 	int32 timestep;								/**< number of seconds per forecast timestep */
 	double *values;								/**< values of the forecast (nullptr if no forecast) */
 	TIMESTAMP (*external)(void *obj, void *fc); /**< external forecast update call */
-	struct s_forecast *next;					/**< next forecast data block (nullptr for last) */
+	struct s_forecast *next;
 } FORECAST;										/**< Forecast data block */
 
 typedef enum

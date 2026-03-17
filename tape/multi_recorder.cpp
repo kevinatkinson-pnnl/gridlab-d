@@ -31,6 +31,8 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
+#include <shared_mutex>
 
 #include "gridlabd.h"
 #include "object.h"
@@ -294,54 +296,56 @@ static int multi_recorder_open(OBJECT *obj)
 	set_csv_options();
 
 	// set out_property here
-	{size_t offset = 0;
+	{
+		size_t offset = 0;
 		char unit_buffer[1024];
-		char *token = 0, *prop_ptr = 0, *unit_ptr = 0, *obj_ptr = 0;
+		char *token = nullptr, *prop_ptr = nullptr, *unit_ptr = nullptr;
+		char *_strtok_ctx = nullptr; /* thread-local strtok context */
 		char objstr[1024], bigpropstr[1024], propstr[1024], unitstr[64];
-		PROPERTY *prop = 0;
-		UNIT *unit = 0;
+		PROPERTY *prop = nullptr;
+		UNIT *unit = nullptr;
 		int first = 1;
-		OBJECT *myobj = 0;
+		OBJECT *myobj = nullptr;
 		switch(my->header_units){
 			case HU_DEFAULT:
 				strcpy(my->out_property, my->property);
 				break;
 			case HU_ALL:
 				strcpy(unit_buffer, my->property);
-				for(token = strtok(unit_buffer, ","); token != nullptr; token = strtok(nullptr, ",")){
-					unit = 0;
-					prop = 0;
+				_strtok_ctx = nullptr;
+				for(token = strtok_s(unit_buffer, ",", &_strtok_ctx); token != nullptr; token = strtok_s(nullptr, ",", &_strtok_ctx)){
+					unit = nullptr;
+					prop = nullptr;
 					unitstr[0] = 0;
 					propstr[0] = 0;
 					objstr[0] = 0;
 					prop_ptr = strchr(token, ':');
-					if(prop_ptr != 0){
+					if(prop_ptr != nullptr){
 						unit_ptr = strchr(prop_ptr, '[');
 					} else {
 						unit_ptr = strchr(token, '[');
 					}
 					// detect if this points at a different object and split accordingly
-					if(prop_ptr == 0){
+					if(prop_ptr == nullptr){
 						prop_ptr = token;
 						myobj = obj->parent;
 						strcpy(bigpropstr, token);
 					} else {
 						sscanf(token, "%[^:]:%[^\n\r\t;]", objstr, bigpropstr);
 						myobj = gl_get_object(objstr);
-						if(myobj == 0){
+						if(myobj == nullptr){
 							gl_error("multi_recorder:%d: unable to find object '%s'", obj->id, objstr);
 							return 0;
 						}
 					}
 					// split unit from property, if present
-					if(unit_ptr == 0){
+					if(unit_ptr == nullptr){
 						// no explicit unit
-						prop = gl_get_property(myobj, bigpropstr,nullptr);
-						if(prop == 0){
+						prop = gl_get_property(myobj, bigpropstr, nullptr);
+						if(prop == nullptr){
 							gl_error("multi_recorder:%d: unable to find property '%s' for object '%s'", obj->id, propstr, myobj->name);
 							return 0;
 						}
-
 						if(prop->ptype == PT_double){
 							strcpy(unitstr, prop->unit->name);
 						} else {
@@ -352,12 +356,12 @@ static int multi_recorder_open(OBJECT *obj)
 						// has explicit unit
 						if(2 == sscanf(bigpropstr, "%[A-Za-z0-9_.][%[^]\n0]", propstr, unitstr)){
 							unit = gl_find_unit(unitstr);
-							if(unit == 0){
+							if(unit == nullptr){
 								gl_error("multi_recorder:%d: unable to find unit '%s' for property '%s'", obj->id, unitstr, propstr);
 								return 0;
 							}
-							prop = gl_get_property(myobj, propstr,nullptr);
-							if(prop == 0){
+							prop = gl_get_property(myobj, propstr, nullptr);
+							if(prop == nullptr){
 								gl_error("multi_recorder:%d: unable to find property '%s' for object '%s'", obj->id, propstr, myobj->name);
 								return 0;
 							}
@@ -365,9 +369,6 @@ static int multi_recorder_open(OBJECT *obj)
 							gl_error("oops");
 						}
 					}
-					// check if property exists in object
-					// find property
-
 /*					// breakpoint
 					if(3 == sscanf(token, "%[A-Za-z0-9_.][%[^]\n,\0]:%[A-Za-z0-9_.][%[^]\n,\0]", objstr, propstr, unitstr)){
 						myobj = gl_get_object(objstr);
@@ -385,7 +386,7 @@ static int multi_recorder_open(OBJECT *obj)
 					// print the property, and if there is one, the unit
 					if(myobj != obj->parent){
 						// need to include target object name in string
-						if(unit != 0){
+						if(unit != nullptr){
 							sprintf(my->out_property.get_string()+offset, "%s%s:%s[%s]", (first ? "" : ","), myobj->name, propstr, (unitstr[0] ? unitstr : unit->name));
 							offset += strlen(propstr) + (first ? 0 : 1) + 2 + strlen(unitstr[0] ? unitstr : unit->name) + strlen(myobj->name) + 1;
 						} else {
@@ -394,7 +395,7 @@ static int multi_recorder_open(OBJECT *obj)
 						}
 					} else {
 						// parent object, so no explicit object name
-						if(unit != 0){
+						if(unit != nullptr){
 							sprintf(my->out_property.get_string()+offset, "%s%s[%s]", (first ? "" : ","), propstr, (unitstr[0] ? unitstr : unit->name));
 							offset += strlen(propstr) + (first ? 0 : 1) + 2 + strlen(unitstr[0] ? unitstr : unit->name);
 						} else {
@@ -403,19 +404,20 @@ static int multi_recorder_open(OBJECT *obj)
 						}
 					}
 					first = 0;
-				}
+				} /* end for HU_ALL */
 				break;
 			case HU_NONE:
 				strcpy(unit_buffer, my->property);
-				for(token = strtok(unit_buffer, ","); token != nullptr; token = strtok(nullptr, ",")){
+				_strtok_ctx = nullptr;
+				for(token = strtok_s(unit_buffer, ",", &_strtok_ctx); token != nullptr; token = strtok_s(nullptr, ",", &_strtok_ctx)){
 					if(2 == sscanf(token, "%[A-Za-z0-9_:.][%[^]\n0]", propstr, unitstr)){
 						; // no logic change
 					}
-					// print just the property, regardless of type or explicitly declared property
+					// print just the property, regardless of type or explicitly declared unit
 					sprintf(my->out_property.get_string()+offset, "%s%s", (first ? "" : ","), propstr);
 					offset += strlen(propstr) + (first ? 0 : 1);
 					first = 0;
-				}
+				} /* end for HU_NONE */
 				break;
 			default:
 				// error
@@ -461,6 +463,8 @@ static void close_multi_recorder(struct recorder *my)
 static TIMESTAMP multi_recorder_write(OBJECT *obj)
 {
 	struct recorder *my = object_data<struct recorder>(obj);
+	/* Serialise all writes: protects my->samples, my->last, my->multifp */
+	std::unique_lock<std::shared_mutex> _write_lock(SharedMutexManager::get_mutex(&obj->lock));
 	char ts[64]="0"; /* 0 = INIT */
 	if (my->format==0)
 	{
@@ -557,7 +561,8 @@ RECORDER_MAP *link_multi_properties(OBJECT *obj, char *property_list)
 	double scale = 1.0;
 
 	strcpy(list,property_list); /* avoid destroying orginal list */
-	for (itemptr = strtok(list,","); itemptr != nullptr; itemptr = strtok(nullptr,","))
+	char *_strtok_ctx = nullptr;
+	for (itemptr = strtok_s(list,",",&_strtok_ctx); itemptr != nullptr; itemptr = strtok_s(nullptr,",",&_strtok_ctx))
 	{
 		cpart = 0;
 		cid = -1;
@@ -733,7 +738,11 @@ TIMESTAMP sync_multi_recorder(OBJECT *obj, TIMESTAMP t0, PASSCONFIG pass) {
 
 	/* connect to property */
 	if (my->rmap == nullptr) {
-		my->rmap = link_multi_properties(obj->parent, my->property); // allowable use of obj->parent
+		/* Guard the check-then-act with a write lock to prevent double-init races */
+		std::unique_lock<std::shared_mutex> _init_lock(SharedMutexManager::get_mutex(&obj->lock));
+		if (my->rmap == nullptr) { /* re-check under lock */
+			my->rmap = link_multi_properties(obj->parent, my->property); // allowable use of obj->parent
+		}
 	}
 	/*	invalid target object must be handled individually */
 	/*if (my->target==nullptr)

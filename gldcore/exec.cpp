@@ -163,6 +163,13 @@ update time and those that are immediately related to it need be updated.  This
 #include <sstream>
 #include <string>
 #include <vector>
+#include <thread>
+#include <queue>
+#include <functional>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
+#include <latch>
 
 #include "cpp_threadpool.h"
 
@@ -327,6 +334,8 @@ struct arg_data
     int incr;
 };
 struct arg_data arg_data_array[2];
+
+int altThreadcount = 4;
 
 INDEX **exec_getranks() { return ranks; }
 
@@ -869,10 +878,17 @@ nlohmann::ordered_json do_checkpoint(const char *output_directory)
 			if (json_file.is_open())
 			{
 				// pretty print with 2-space indentation
-				std::string out = checkpoint.dump(2);
-				json_file << out;
-				json_file.close();
-				output_verbose("JSON checkpoint written to '%s'", json_fn);
+                try
+                {
+                    std::string out = checkpoint.dump(2);
+                    json_file << out;
+                    json_file.close();
+                    output_verbose("JSON checkpoint written to '%s'", json_fn);
+                }
+                catch(const std::exception& e)
+                {
+                    std::cerr << e.what() << '\n';
+                }
 			}
 			else
 			{
@@ -889,7 +905,6 @@ nlohmann::ordered_json do_checkpoint(const char *output_directory)
 threadpool_thread_data::threadpool_thread_data(int size,
                                                cpp_threadpool *threadpool)
 {
-    //	data = std::vector<struct sync_data>(size);
     data = new struct sync_data[size];
     count = size;
     thread_map = threadpool->get_threadmap();
@@ -992,10 +1007,42 @@ static void tp_do_object_sync(OBJECT *obj)
     }
 }
 
-static void ss_do_object_sync(int thread, void *item)
+struct ThreadPool {
+    ThreadPool(int n) {
+        for (int i = 0; i < n; ++i)
+            workers.emplace_back([this] {
+                for (;;) {
+                    std::function<void()> task;
+                    {
+                        std::unique_lock lock(mtx);
+                        cv.wait(lock, [&]{ return stop || !tasks.empty(); });
+                        if (stop && tasks.empty()) return;
+                        task = std::move(tasks.front());
+                        tasks.pop();
+                    }
+                    task();
+                }
+            });
+    }
+    ~ThreadPool() {
+        { std::lock_guard lock(mtx); stop = true; }
+        cv.notify_all();
+        workers.clear(); // join all threads before members are destroyed
+    }
+    void enqueue(std::function<void()> f) {
+        { std::lock_guard lock(mtx); tasks.push(std::move(f)); }
+        cv.notify_one();
+    }
+private:
+    std::vector<std::jthread> workers;
+    std::queue<std::function<void()>> tasks;
+    std::mutex mtx;
+    std::condition_variable cv;
+    bool stop = false;
+};
+
+static void ss_do_object_sync(struct sync_data &data, void *item)
 {
-    // struct sync_data *data = &thread_data->data[thread];
-    std::shared_ptr<struct sync_data> data = thread_data->data[thread];
     OBJECT *obj = (OBJECT *)item;
     TIMESTAMP this_t;
     char b[64];
@@ -1091,7 +1138,7 @@ static void ss_do_object_sync(int thread, void *item)
     if (this_t < -1)
         this_t = -this_t;
     else if (this_t != TS_NEVER)
-        data->hard_event++; /* this counts the number of hard events */
+        data.hard_event++; /* this counts the number of hard events */
 
     /* check for stopped clock */
     if (this_t < global_clock)
@@ -1105,7 +1152,7 @@ static void ss_do_object_sync(int thread, void *item)
            This usually is caused by a bug in the module that implements that
            object's class.
          */
-        data->status = FAILED;
+        data.status = FAILED;
     }
     else
     {
@@ -1135,13 +1182,10 @@ static void ss_do_object_sync(int thread, void *item)
                      global_minimum_timestep;
 
         /* if this event precedes next step, next step is now this event */
-        if (data->step_to > this_t)
-        {
-            // LOCK(data);
-            data->step_to = this_t;
-            // UNLOCK(data);
-        }
-        // printf("data->step_to=%d, this_t=%d\n", data->step_to, this_t);
+        // Each call to ss_do_object_sync owns its sync_data slot exclusively
+        // (one task per slot, no sharing), so no lock is needed here.
+        if (data.step_to > this_t)
+            data.step_to = this_t;
     }
 }
 
@@ -1161,7 +1205,7 @@ static void *ss_do_object_sync_list(void *threadarg)
     {
         if (iPtr < incr)
         {
-            ss_do_object_sync(thread, ptr->data);
+            ss_do_object_sync(thread_data->data[thread], ptr->data);
             iPtr++;
         }
     }
@@ -2601,10 +2645,6 @@ void exec_clock_update_modules()
 
 STATUS multi_thread_init()
 {
-    // Only setup threadpool for each object rank list at the first iteration;
-    cpp_threadpool *threadpool = new cpp_threadpool(global_threadcount);
-    // int n_threads; //number of thread used in the threadpool of an object rank
-    // list
     OBJSYNCDATA *thread = nullptr;
     // struct arg_data *arg_data_array;
     std::vector<std::shared_ptr<struct arg_data>> arg_data_array = {};
@@ -2635,17 +2675,9 @@ STATUS multi_thread_init()
                 */
         return FAILED;
     }
-    thread_data->data.resize(global_threadcount);
-    thread_data->count = global_threadcount;
-    // thread_data->data = (struct sync_data *)(thread_data + 1);
-    // for (j = 0; j < thread_data->count; j++)
-    // thread_data->data[j].status = SUCCESS;
-
-    for (j = 0; j < thread_data->count; j++)
-    {
-        thread_data->data[j] = std::make_shared<struct sync_data>();
-        thread_data->data[j]->status = SUCCESS;
-    }
+    thread_data->data.resize(altThreadcount);
+    for (j = 0; j < altThreadcount; j++)
+        thread_data->data[j].status = SUCCESS;
 
     return SUCCESS;
 }
@@ -2757,12 +2789,8 @@ STATUS multi_thread_init()
 // Commenting everything related to multithreading
 STATUS run_preparation()
 {
-    // Only setup threadpool for each object rank list at the first iteration;
-    cpp_threadpool *threadpool = new cpp_threadpool(global_threadcount);
     // After the first iteration, setTP = false;
     bool setTP = true;
-    // int n_threads; //number of thread used in the threadpool of an object rank
-    // list
     OBJSYNCDATA *thread = nullptr;
     struct arg_data *arg_data_array;
     int nObjRankList, iObjRankList;
@@ -3139,7 +3167,8 @@ void report_performance_after_run(time_t start_time, int64 passes,
 static bool execute_single_simulation_iteration(cpp_threadpool *threadpool,
                                                 int64 &passes, int64 &tsteps,
                                                 int &j, LISTITEM *&ptr,
-                                                int &pc_rv, int &iObjRankList)
+                                                int &pc_rv, int &iObjRankList,
+                                                ThreadPool &pool)
 {
     std::shared_ptr<sync_data> sync_data_nullptr = nullptr;
     TIMESTAMP internal_synctime;
@@ -3312,10 +3341,11 @@ static bool execute_single_simulation_iteration(cpp_threadpool *threadpool,
 
     if (!global_debug_mode)
     {
-        for (j = 0; j < thread_data->count; j++)
+        for (j = 0; j < (int)thread_data->data.size(); j++)
         {
-            thread_data->data[j]->hard_event = 0;
-            thread_data->data[j]->step_to = TS_NEVER;
+            thread_data->data[j].hard_event = 0;
+            thread_data->data[j].step_to = TS_NEVER;
+            thread_data->data[j].status = SUCCESS;  // must reset status each pass or stale FAILED poisons future iterations
         }
     }
 #ifdef _DEBUG
@@ -3365,15 +3395,18 @@ static bool execute_single_simulation_iteration(cpp_threadpool *threadpool,
             }
             else
             {
-                // sjin: if global_threadcount == 1, no pthread multhreading
-                if (global_threadcount == 1)
+                if (altThreadcount == 1)
                 {
+                    using Clock = std::chrono::high_resolution_clock;
+                    using Ms    = std::chrono::duration<double, std::milli>;
+                    auto t0 = Clock::now();
+                    int st_obj = 0;
                     for (ptr = ranks[pass]->ordinal[i]->first; ptr != nullptr;
-                         ptr = ptr->next)
+                        ptr = ptr->next)
                     {
+                        ++st_obj;
                         OBJECT *obj = static_cast<OBJECT *>(ptr->data);
-                        ss_do_object_sync(0, ptr->data);
-
+                        ss_do_object_sync(thread_data->data[0], ptr->data);
                         if (obj->valid_to == TS_INVALID)
                         {
                             // Get us out of the loop so others don't exec on bad status
@@ -3382,11 +3415,167 @@ static bool execute_single_simulation_iteration(cpp_threadpool *threadpool,
                         /// printf("%d %s %d\n", obj->id, obj->name, obj->rank);
                     }
                     // printf("\n");
+                    auto t1 = Clock::now();
+                    std::cout << "[TIMING] Single-threaded loop:     "
+                            << std::chrono::duration_cast<Ms>(t1 - t0).count()
+                            << " ms  (st_obj=" << st_obj << ")\n";
                 }
                 else
-                { // sjin: implement pthreads
-                  //  multithread_stuff(i, threadpool, iObjRankList); // Function
-                  //  is disabled
+                {
+                    using Clock = std::chrono::high_resolution_clock;
+                    using Ms    = std::chrono::duration<double, std::milli>;
+
+                    auto t_section_start = Clock::now();
+
+                    // ── Build item list ──
+                    auto t0 = Clock::now();
+                    std::vector<LISTITEM*> items;
+                    for (ptr = ranks[pass]->ordinal[i]->first; ptr != nullptr;
+                        ptr = ptr->next)
+                        items.push_back(ptr);
+                    int n_obj = static_cast<int>(items.size());
+                    auto t1 = Clock::now();
+                    std::cout << "[TIMING] Build item list:          "
+                            << std::chrono::duration_cast<Ms>(t1 - t0).count()
+                            << " ms  (n_obj=" << n_obj << ")\n";
+
+                    if (n_obj == 0)
+                        continue;
+
+                    int n_threads = std::min(altThreadcount, n_obj);
+
+                    // ── Group objects by round-robin (counting on parent lock in object sync)──
+                    t0 = Clock::now();
+                    std::vector<std::vector<int>> groups(n_threads);
+                    for (int idx = 0; idx < n_obj; ++idx)
+                        groups[idx % n_threads].push_back(idx);
+                    t1 = Clock::now();
+                    std::cout << "[TIMING] Group objects (round-robin): "
+                            << std::chrono::duration_cast<Ms>(t1 - t0).count()
+                            << " ms  (n_threads=" << n_threads << ")\n";
+
+                    // ── Count active threads ──
+                    t0 = Clock::now();
+                    int active_threads = 0;
+                    for (int t = 0; t < n_threads; ++t)
+                        if (!groups[t].empty())
+                            ++active_threads;
+                    t1 = Clock::now();
+                    std::cout << "[TIMING] Count active threads:     "
+                            << std::chrono::duration_cast<Ms>(t1 - t0).count()
+                            << " ms  (active=" << active_threads << ")\n";
+
+                    if (active_threads == 0)
+                        continue;
+
+                    // ── Enqueue tasks ──
+                    t0 = Clock::now();
+                    std::latch done(active_threads);
+                    std::atomic<bool> found_invalid{false};
+
+                    std::vector<std::atomic<double>> thread_work_ms(n_threads);
+                    for (auto &a : thread_work_ms) a.store(0.0);
+
+                    // Cache group sizes before they are moved away
+                    std::vector<int> group_sizes(n_threads);
+                    for (int t = 0; t < n_threads; ++t)
+                        group_sizes[t] = static_cast<int>(groups[t].size());
+
+                    for (int t = 0; t < n_threads; ++t) {
+                        if (groups[t].empty())
+                            continue;
+                        struct sync_data *slot = &thread_data->data[t];
+                        auto group = std::move(groups[t]);
+
+                        pool.enqueue([slot, group = std::move(group),
+                                    &done, &items, &found_invalid,
+                                    &thread_work_ms, t]() {
+
+                            auto tw_start = Clock::now();
+
+                            for (int idx : group) {
+                                if (found_invalid.load(std::memory_order_acquire))
+                                    break;
+
+                                auto ts = Clock::now();
+                                ss_do_object_sync(*slot, items[idx]->data);
+                                auto te = Clock::now();
+
+                                double call_ms =
+                                    std::chrono::duration_cast<Ms>(te - ts).count();
+                                if (call_ms > 5.0) {
+                                    std::cout << "[TIMING] WARNING: ss_do_object_sync"
+                                            << " on thread " << t
+                                            << " idx "       << idx
+                                            << " took "      << call_ms << " ms\n";
+                                }
+
+                                OBJECT *obj = static_cast<OBJECT *>(items[idx]->data);
+                                if (obj->valid_to == TS_INVALID) {
+                                    found_invalid.store(true,
+                                        std::memory_order_release);
+                                    break;
+                                }
+                            }
+
+                            double elapsed =
+                                std::chrono::duration_cast<Ms>(
+                                    Clock::now() - tw_start).count();
+                            thread_work_ms[t].store(elapsed,
+                                std::memory_order_relaxed);
+
+                            done.count_down();
+                        });
+                    }
+                    t1 = Clock::now();
+                    std::cout << "[TIMING] Enqueue tasks:            "
+                            << std::chrono::duration_cast<Ms>(t1 - t0).count()
+                            << " ms\n";
+
+                    // ── Wait for threads ──
+                    t0 = Clock::now();
+                    done.wait();
+                    t1 = Clock::now();
+                    std::cout << "[TIMING] Wait for threads (latch): "
+                            << std::chrono::duration_cast<Ms>(t1 - t0).count()
+                            << " ms\n";
+
+                    for (int t = 0; t < n_threads; ++t) {
+                        if (thread_work_ms[t].load() > 0.0) {
+                            std::cout << "[TIMING]   thread " << t
+                                    << " work: "
+                                    << thread_work_ms[t].load()
+                                    << " ms  (group size=" << group_sizes[t] << ")\n";
+                        }
+                    }
+
+                    // ── Merge thread results ──
+                    t0 = Clock::now();
+                    auto &d0 = thread_data->data[0];
+                    for (int t = 1; t < n_threads; ++t) {
+                        auto &d = thread_data->data[t];
+                        d0.hard_event += d.hard_event;
+                        if (d.status == FAILED)
+                            d0.status = FAILED;
+                        if (d.step_to < d0.step_to)
+                            d0.step_to = d.step_to;
+                        d.hard_event = 0;
+                        d.status = SUCCESS;
+                        d.step_to = TS_NEVER;
+                    }
+                    t1 = Clock::now();
+                    std::cout << "[TIMING] Merge thread results:     "
+                            << std::chrono::duration_cast<Ms>(t1 - t0).count()
+                            << " ms\n";
+
+                    std::cout << "[TIMING] ── Section total:         "
+                            << std::chrono::duration_cast<Ms>(
+                                    Clock::now() - t_section_start).count()
+                            << " ms\n\n";
+
+                    if (found_invalid.load(std::memory_order_acquire)) {
+                        break;
+                    }
                 }
             }
         }
@@ -3404,9 +3593,13 @@ static bool execute_single_simulation_iteration(cpp_threadpool *threadpool,
 
     if (!global_debug_mode)
     {
-        for (j = 0; j < thread_data->count; j++)
+        int n_used = std::min(altThreadcount, (int)thread_data->data.size());
+        for (j = 0; j < n_used; j++)
         {
-            exec_sync_merge(sync_data_nullptr, thread_data->data[j]);
+            /* wrap in a temporary shared_ptr view – no ownership, no ref-count */
+            auto tmp = std::shared_ptr<struct sync_data>(
+                std::shared_ptr<struct sync_data>{}, &thread_data->data[j]);
+            exec_sync_merge(sync_data_nullptr, tmp);
         }
 
         /* report progress */
@@ -3547,11 +3740,10 @@ static void run_main_simulation_loop(cpp_threadpool *threadpool, int64 &passes,
                                      int64 &tsteps, int &j, LISTITEM *&ptr,
                                      int &pc_rv, int &iObjRankList)
 {
-    int i = 0;
-    /* main loop runs for iteration limit, or when nothing futher occurs (ignoring
-     * soft events) */
+    /* Construct the thread pool once and reuse it across all iterations. */
+    ThreadPool pool(altThreadcount);
     while (execute_single_simulation_iteration(threadpool, passes, tsteps, j, ptr,
-                                               pc_rv, iObjRankList))
+                                               pc_rv, iObjRankList, pool))
     {
         continue;
     }
@@ -3574,9 +3766,12 @@ static void run_single_simulation_step(cpp_threadpool *threadpool,
                                        LISTITEM *&ptr, int &pc_rv,
                                        int &iObjRankList)
 {
-    /* Execute one iteration using the shared iteration function */
+    /* NOTE: callers that drive a full step loop should create the ThreadPool
+     * once outside and pass it via execute_single_simulation_iteration directly.
+     * This one-shot variant is provided for standalone single-iteration use. */
+    ThreadPool pool(altThreadcount);
     execute_single_simulation_iteration(threadpool, passes, tsteps, j, ptr, pc_rv,
-                                        iObjRankList);
+                                        iObjRankList, pool);
 }
 
 /** Check if the simulation has been properly initialized
@@ -3601,87 +3796,72 @@ STATUS exec_finalize_all(void) { return finalize_all(); }
         @return STATUS is SUCCESS if the step completed successfully, FAILED
  otherwise.
  **/
+/* Persistent thread pool for single-step API use (exec_step(void)).
+ * Created on first call, reused on subsequent calls to avoid spawn overhead. */
+static ThreadPool *g_step_pool = nullptr;
+
 STATUS exec_step(void)
 {
-    // Setup variables needed for the step (similar to exec_start)
-    cpp_threadpool *threadpool = new cpp_threadpool(global_threadcount);
     std::shared_ptr<sync_data> sync_data_nullptr = nullptr;
     int64 passes = 0, tsteps = 0;
     int j = 0, pc_rv = 0, iObjRankList = 0;
     LISTITEM *ptr = nullptr;
-
     STATUS result = SUCCESS;
 
-    // Check if simulation has been properly initialized
-    // exec_step should only be used after exec_start has been called or
-    // simulation is initialized
     if (ranks == nullptr)
     {
         output_error(
             "exec_step: simulation not properly initialized - ranks not set up");
-        delete threadpool;
         return FAILED;
     }
 
-    // Check if we're in a valid state to step
     if (iteration_counter <= 0)
     {
         output_verbose(
             "exec_step: simulation has completed or iteration limit reached");
-        delete threadpool;
-        return SUCCESS; // Not an error, just nothing to do
+        return SUCCESS;
     }
 
-    /* main step exception handler */
+    /* Create the persistent pool once; reuse on every subsequent call. */
+    if (g_step_pool == nullptr)
+        g_step_pool = new ThreadPool(altThreadcount);
+
+    /* Dummy cpp_threadpool – kept only to satisfy the function signature
+     * of execute_single_simulation_iteration; it is not used for object sync. */
+    cpp_threadpool threadpool(0);
+
     TRY
     {
-        /* Store the current clock to detect when it advances */
         TIMESTAMP start_clock = global_clock;
 
-        /* Cap the next event time before stepping to avoid overshooting the API
-         * step target. */
         if (global_step_time != TS_NEVER)
         {
             TIMESTAMP next_event = exec_sync_get(sync_data_nullptr);
             if (next_event > global_step_time)
-            {
                 exec_sync_set(sync_data_nullptr, global_step_time, false);
-            }
         }
 
-        /* Keep running iterations until the clock advances or simulation should
-         * stop */
-        while (execute_single_simulation_iteration(threadpool, passes, tsteps, j,
-                                                   ptr, pc_rv, iObjRankList))
+        while (execute_single_simulation_iteration(&threadpool, passes, tsteps, j,
+                                                   ptr, pc_rv, iObjRankList,
+                                                   *g_step_pool))
         {
-            /* Check if the clock has advanced - if so, we've completed one step */
             if (global_clock > start_clock)
-            {
                 break;
-            }
 
-            /* Check if we need to cap the next event time to avoid overshooting step
-             * target */
             if (global_step_time != TS_NEVER)
             {
                 TIMESTAMP next_event = exec_sync_get(sync_data_nullptr);
                 if (next_event > global_step_time)
-                {
                     exec_sync_set(sync_data_nullptr, global_step_time, false);
-                }
             }
         }
     }
-
     CATCH(const char *msg)
     {
         output_error("exec_step halted: %s", msg);
         result = FAILED;
     }
     ENDCATCH
-
-    /* deallocate threadpool */
-    delete threadpool;
 
     return result;
 }
@@ -3794,6 +3974,7 @@ STATUS exec_start()
 
     if (run_preparation() == FAILED)
     {
+        delete threadpool;
         return FAILED;
     }
 
@@ -3873,102 +4054,52 @@ STATUS exec_start()
 
     report_performance_after_run(started_at, passes, tsteps);
 
-    /** Execute a single simulation iteration
-            This function executes one iteration of the simulation loop, handling
-            realtime control, delta mode, object synchronization, and event
-     processing.
-
-            @param threadpool pointer to the thread pool for multithreading
-            @param passes reference to pass counter
-            @param tsteps reference to timestep counter
-            @param j reference to loop variable used for thread data
-            @param ptr reference to list item pointer
-            @param pc_rv reference to precommit return value
-            @param iObjRankList reference to object rank list index
-            @return true if simulation should continue, false if it should stop
-     **/
-
-    /** Single step simulation function
-            This function executes one iteration of the main simulation loop using
-     the extracted iteration function to eliminate code duplication.
-
-            @param threadpool pointer to the thread pool for multithreading
-            @param passes reference to pass counter
-            @param tsteps reference to timestep counter
-            @param j reference to loop variable used for thread data
-            @param ptr reference to list item pointer
-            @param pc_rv reference to precommit return value
-            @param iObjRankList reference to object rank list index
-     **/
-
-    /** Check if the simulation has been properly initialized
-            @return TRUE if simulation is initialized and ready to step, FALSE
-     otherwise.
-     **/
-
-    /** Finalize all objects in the simulation
-            This is the public interface to finalize_all() for external use.
-            @return STATUS is SUCCESS if finalization completed successfully,
-     FAILED otherwise.
-     **/
-
-    /** Execute a single simulation step
-            This is the public interface for single-step simulation execution.
-            @return STATUS is SUCCESS if the step completed successfully, FAILED
-     otherwise.
-     **/
+    delete threadpool;
     return SUCCESS;
 }
 
 STATUS exec_step(int64 *passes, int64 *tsteps)
 {
     std::shared_ptr<sync_data> sync_data_nullptr = nullptr;
-    cpp_threadpool *threadpool = new cpp_threadpool(global_threadcount);
     int j = 0, pc_rv = 0, iObjRankList = 0;
     LISTITEM *ptr = nullptr;
 
-    // Create local variables for internal use (use provided values or defaults)
     int64 local_passes = (passes != nullptr) ? *passes : 0;
     int64 local_tsteps = (tsteps != nullptr) ? *tsteps : 0;
 
     STATUS result = SUCCESS;
 
-    // Check if simulation has been properly initialized
-    // exec_step should only be used after exec_start has been called or
-    // simulation is initialized
     if (ranks == nullptr)
     {
         output_error(
             "exec_step: simulation not properly initialized - ranks not set up");
-        delete threadpool;
         return FAILED;
     }
 
-    // Check if we're in a valid state to step
     if (iteration_counter <= 0)
     {
         output_verbose(
             "exec_step: simulation has completed or iteration limit reached");
-        delete threadpool;
-        return SUCCESS; // Not an error, just nothing to do
+        return SUCCESS;
     }
 
-    /* main step exception handler */
+    /* Create the persistent pool once; reuse on every subsequent call. */
+    if (g_step_pool == nullptr)
+        g_step_pool = new ThreadPool(altThreadcount);
+
+    /* Dummy cpp_threadpool – not used for object sync. */
+    cpp_threadpool threadpool(0);
+
     TRY
     {
-        /* Store the current clock to detect when it advances */
         TIMESTAMP start_clock = global_clock;
 
-        /* Keep running iterations until the clock advances or simulation should
-         * stop */
         while (execute_single_simulation_iteration(
-            threadpool, local_passes, local_tsteps, j, ptr, pc_rv, iObjRankList))
+            &threadpool, local_passes, local_tsteps, j, ptr, pc_rv, iObjRankList,
+            *g_step_pool))
         {
-            /* Check if the clock has advanced - if so, we've completed one step */
             if (global_clock > start_clock)
-            {
                 break;
-            }
         }
     }
     CATCH(const char *msg)
@@ -3978,14 +4109,10 @@ STATUS exec_step(int64 *passes, int64 *tsteps)
     }
     ENDCATCH
 
-    /* Copy final values back to caller's variables if provided */
     if (passes != nullptr)
         *passes = local_passes;
     if (tsteps != nullptr)
         *tsteps = local_tsteps;
-
-    /* deallocate threadpool */
-    delete threadpool;
 
     return result;
 }
@@ -4113,7 +4240,7 @@ STATUS exec_start(int64 *passes, int64 *tsteps)
     FILE *status_dbg = fopen("/tmp/env_check.log", "a");
     fprintf(status_dbg, "exec_start returning status=%d\n", final_status);
     fclose(status_dbg);
-    // delete threadpool;
+    delete threadpool;
     return final_status;
 }
 

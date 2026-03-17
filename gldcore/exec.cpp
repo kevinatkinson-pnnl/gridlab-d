@@ -335,7 +335,7 @@ struct arg_data
 };
 struct arg_data arg_data_array[2];
 
-int altThreadcount = 1;
+int altThreadcount = 4;
 
 INDEX **exec_getranks() { return ranks; }
 
@@ -3397,12 +3397,16 @@ static bool execute_single_simulation_iteration(cpp_threadpool *threadpool,
             {
                 if (altThreadcount == 1)
                 {
+                    using Clock = std::chrono::high_resolution_clock;
+                    using Ms    = std::chrono::duration<double, std::milli>;
+                    auto t0 = Clock::now();
+                    int st_obj = 0;
                     for (ptr = ranks[pass]->ordinal[i]->first; ptr != nullptr;
-                         ptr = ptr->next)
+                        ptr = ptr->next)
                     {
+                        ++st_obj;
                         OBJECT *obj = static_cast<OBJECT *>(ptr->data);
                         ss_do_object_sync(thread_data->data[0], ptr->data);
-
                         if (obj->valid_to == TS_INVALID)
                         {
                             // Get us out of the loop so others don't exec on bad status
@@ -3411,60 +3415,101 @@ static bool execute_single_simulation_iteration(cpp_threadpool *threadpool,
                         /// printf("%d %s %d\n", obj->id, obj->name, obj->rank);
                     }
                     // printf("\n");
+                    auto t1 = Clock::now();
+                    std::cout << "[TIMING] Single-threaded loop:     "
+                            << std::chrono::duration_cast<Ms>(t1 - t0).count()
+                            << " ms  (st_obj=" << st_obj << ")\n";
                 }
                 else
                 {
+                    using Clock = std::chrono::high_resolution_clock;
+                    using Ms    = std::chrono::duration<double, std::milli>;
+
+                    auto t_section_start = Clock::now();
+
+                    // ── Build item list ──
+                    auto t0 = Clock::now();
                     std::vector<LISTITEM*> items;
                     for (ptr = ranks[pass]->ordinal[i]->first; ptr != nullptr;
-                         ptr = ptr->next)
+                        ptr = ptr->next)
                         items.push_back(ptr);
                     int n_obj = static_cast<int>(items.size());
+                    auto t1 = Clock::now();
+                    std::cout << "[TIMING] Build item list:          "
+                            << std::chrono::duration_cast<Ms>(t1 - t0).count()
+                            << " ms  (n_obj=" << n_obj << ")\n";
+
                     if (n_obj == 0)
                         continue;
 
                     int n_threads = std::min(altThreadcount, n_obj);
 
-                    // ── Group objects by parent to avoid parent-lock contention ──
+                    // ── Group objects by round-robin (counting on parent lock in object sync)──
+                    t0 = Clock::now();
                     std::vector<std::vector<int>> groups(n_threads);
-                    for (int idx = 0; idx < n_obj; ++idx) {
-                        OBJECT *obj = static_cast<OBJECT *>(items[idx]->data);
-                        int tid;
-                        if (obj->parent != nullptr) {
-                            auto h = std::hash<void*>{}(
-                                         static_cast<void*>(obj->parent));
-                            tid = static_cast<int>(h % n_threads);
-                        } else {
-                            tid = idx % n_threads;
-                        }
-                        groups[tid].push_back(idx);
-                    }
+                    for (int idx = 0; idx < n_obj; ++idx)
+                        groups[idx % n_threads].push_back(idx);
+                    t1 = Clock::now();
+                    std::cout << "[TIMING] Group objects (round-robin): "
+                            << std::chrono::duration_cast<Ms>(t1 - t0).count()
+                            << " ms  (n_threads=" << n_threads << ")\n";
 
-                    // Count non-empty groups — only launch threads that have work
+                    // ── Count active threads ──
+                    t0 = Clock::now();
                     int active_threads = 0;
-                    for (int t = 0; t < n_threads; ++t) {
+                    for (int t = 0; t < n_threads; ++t)
                         if (!groups[t].empty())
                             ++active_threads;
-                    }
+                    t1 = Clock::now();
+                    std::cout << "[TIMING] Count active threads:     "
+                            << std::chrono::duration_cast<Ms>(t1 - t0).count()
+                            << " ms  (active=" << active_threads << ")\n";
+
                     if (active_threads == 0)
                         continue;
 
+                    // ── Enqueue tasks ──
+                    t0 = Clock::now();
                     std::latch done(active_threads);
                     std::atomic<bool> found_invalid{false};
+
+                    std::vector<std::atomic<double>> thread_work_ms(n_threads);
+                    for (auto &a : thread_work_ms) a.store(0.0);
+
+                    // Cache group sizes before they are moved away
+                    std::vector<int> group_sizes(n_threads);
+                    for (int t = 0; t < n_threads; ++t)
+                        group_sizes[t] = static_cast<int>(groups[t].size());
 
                     for (int t = 0; t < n_threads; ++t) {
                         if (groups[t].empty())
                             continue;
-
                         struct sync_data *slot = &thread_data->data[t];
-                        // Capture group by value so it outlives this scope
                         auto group = std::move(groups[t]);
 
                         pool.enqueue([slot, group = std::move(group),
-                                      &done, &items, &found_invalid]() {
+                                    &done, &items, &found_invalid,
+                                    &thread_work_ms, t]() {
+
+                            auto tw_start = Clock::now();
+
                             for (int idx : group) {
                                 if (found_invalid.load(std::memory_order_acquire))
                                     break;
+
+                                auto ts = Clock::now();
                                 ss_do_object_sync(*slot, items[idx]->data);
+                                auto te = Clock::now();
+
+                                double call_ms =
+                                    std::chrono::duration_cast<Ms>(te - ts).count();
+                                if (call_ms > 5.0) {
+                                    std::cout << "[TIMING] WARNING: ss_do_object_sync"
+                                            << " on thread " << t
+                                            << " idx "       << idx
+                                            << " took "      << call_ms << " ms\n";
+                                }
+
                                 OBJECT *obj = static_cast<OBJECT *>(items[idx]->data);
                                 if (obj->valid_to == TS_INVALID) {
                                     found_invalid.store(true,
@@ -3472,11 +3517,40 @@ static bool execute_single_simulation_iteration(cpp_threadpool *threadpool,
                                     break;
                                 }
                             }
+
+                            double elapsed =
+                                std::chrono::duration_cast<Ms>(
+                                    Clock::now() - tw_start).count();
+                            thread_work_ms[t].store(elapsed,
+                                std::memory_order_relaxed);
+
                             done.count_down();
                         });
                     }
-                    done.wait();
+                    t1 = Clock::now();
+                    std::cout << "[TIMING] Enqueue tasks:            "
+                            << std::chrono::duration_cast<Ms>(t1 - t0).count()
+                            << " ms\n";
 
+                    // ── Wait for threads ──
+                    t0 = Clock::now();
+                    done.wait();
+                    t1 = Clock::now();
+                    std::cout << "[TIMING] Wait for threads (latch): "
+                            << std::chrono::duration_cast<Ms>(t1 - t0).count()
+                            << " ms\n";
+
+                    for (int t = 0; t < n_threads; ++t) {
+                        if (thread_work_ms[t].load() > 0.0) {
+                            std::cout << "[TIMING]   thread " << t
+                                    << " work: "
+                                    << thread_work_ms[t].load()
+                                    << " ms  (group size=" << group_sizes[t] << ")\n";
+                        }
+                    }
+
+                    // ── Merge thread results ──
+                    t0 = Clock::now();
                     auto &d0 = thread_data->data[0];
                     for (int t = 1; t < n_threads; ++t) {
                         auto &d = thread_data->data[t];
@@ -3489,6 +3563,16 @@ static bool execute_single_simulation_iteration(cpp_threadpool *threadpool,
                         d.status = SUCCESS;
                         d.step_to = TS_NEVER;
                     }
+                    t1 = Clock::now();
+                    std::cout << "[TIMING] Merge thread results:     "
+                            << std::chrono::duration_cast<Ms>(t1 - t0).count()
+                            << " ms\n";
+
+                    std::cout << "[TIMING] ── Section total:         "
+                            << std::chrono::duration_cast<Ms>(
+                                    Clock::now() - t_section_start).count()
+                            << " ms\n\n";
+
                     if (found_invalid.load(std::memory_order_acquire)) {
                         break;
                     }

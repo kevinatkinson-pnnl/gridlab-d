@@ -142,10 +142,7 @@ def gld_with_model(gld_instance):
     model_path = Path(__file__).parent / "test_HVAC_balance.glm"
     result = gld_instance.load(str(model_path))
     assert result == 0, f"Failed to load model: {result}"
-    
-    result = gld_instance.setup_after_load()
-    assert result == 0, f"Failed to initialize model: {result}"
-    
+
     yield gld_instance
 
 

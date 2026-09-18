@@ -1,5 +1,8 @@
 # Building GridLAB-D
 
+Instructions for building the Python package, including native Windows wheels
+and editable installs, are in [python_bindings/README.md](python_bindings/README.md).
+
 ## Prerequisites
 
 CMake  

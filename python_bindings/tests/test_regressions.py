@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 import gridlabd
-import shutil
 
 
 def test_step_respects_fixed_timestep(gld_instance, test_models_dir):
@@ -94,22 +93,19 @@ def test_get_time_returns_iso8601(gld_instance, test_models_dir):
     assert re.match(iso_pattern, time_str), f"Non-ISO timestamp: {time_str}"
 
 
-def _load_house_with_solar_for_step(gld, model_dir: Path):
-    """Load and initialize a house_with_solar* model for step/get_property tests."""
-    if not model_dir.exists():
-        pytest.skip(f"Model directory not found: {model_dir}")
-    gld.set_working_directory(str(model_dir))
-    assert gld.load("houses.glm") == 0
+def _load_substation_for_step(gld):
+    """Use a substation, whose power properties differ from those of a meter."""
+    model = Path(__file__).parent / "models" / "substation_property_fallback.glm"
+    assert gld.load(str(model)) == 0
     assert gld.set_time_step(300) == 0
     assert gld.setup_after_load() == 0
     status, _ = gld.step()
-    assert status >= 0
+    assert status == 0
 
 
 def test_network_node_measured_real_power_falls_back_to_distribution_power(gld_instance):
     """Regression: measured_real_power should succeed on feeder network_node objects."""
-    model_dir = Path(__file__).resolve().parents[1] / "house_with_solar"
-    _load_house_with_solar_for_step(gld_instance, model_dir)
+    _load_substation_for_step(gld_instance)
 
     # This model reproduces the regression because measured_real_power is not
     # directly published, while a phase-specific distribution_power_* is.
@@ -134,8 +130,7 @@ def test_network_node_measured_real_power_falls_back_to_distribution_power(gld_i
 
 def test_network_node_measured_real_power_typed_uses_fallback_type(gld_instance):
     """Regression: typed get_property should use the fallback property's type metadata."""
-    model_dir = Path(__file__).resolve().parents[1] / "house_with_solar"
-    _load_house_with_solar_for_step(gld_instance, model_dir)
+    _load_substation_for_step(gld_instance)
 
     distribution_code, distribution_value = gld_instance.get_property(
         "network_node", "distribution_power_A", typed=True
@@ -150,23 +145,18 @@ def test_network_node_measured_real_power_typed_uses_fallback_type(gld_instance)
     assert isinstance(measured_value, complex)
 
 
-def test_measured_real_power_fallback_works_across_multiple_instances(tmp_path):
-    """Regression: independent workers can query the fallback in separate model directories."""
-    source = Path(__file__).resolve().parents[1] / "house_with_solar"
-    model_dirs = [tmp_path / f"house_with_solar_{i}" for i in range(3)]
-    for model_dir in model_dirs:
-        shutil.copytree(source, model_dir)
-
+def test_measured_real_power_fallback_works_across_multiple_instances():
+    """Regression: independent workers can query a substation's fallback property."""
     instances = [gridlabd.GridLabD(), gridlabd.GridLabD(), gridlabd.GridLabD()]
     try:
-        for gld, model_dir in zip(instances, model_dirs):
-            _load_house_with_solar_for_step(gld, model_dir)
+        for gld in instances:
+            _load_substation_for_step(gld)
             code, value = gld.get_property("network_node", "measured_real_power", typed=True)
             assert code == 0
             assert value not in (None, "")
     finally:
         for gld in instances:
-            del gld
+            gld._shutdown_worker()
 
 
 def test_get_properties_by_class_name_returns_object_names(gld_instance):

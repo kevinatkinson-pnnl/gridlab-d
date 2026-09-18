@@ -33,7 +33,7 @@ STATUS instance_slave_get_data(void *buffer, size_t offset, size_t sz) {
 
   switch (global_multirun_connection) {
   case MRC_MEM:
-#if WIN32
+#ifdef WIN32
     if (slave_cache == 0) {
       output_error(
           "instance_slave_get_data(): called with uninitialized slave_cache");

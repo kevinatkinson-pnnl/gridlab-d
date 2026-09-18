@@ -40,7 +40,9 @@ extern size_t output_get_message_capture_limit();
 
 #ifdef _WIN32
 #include <direct.h>
+#include <process.h>
 #define getcwd _getcwd
+#define getpid _getpid
 #else
 #include <unistd.h>
 #endif
@@ -352,8 +354,14 @@ void apply_runtime_paths(const fs::path &exec_path) {
 
 } // namespace
 
-void GridLabD::set_install_root(const std::string &install_root) {
-  fs::path candidate(install_root);
+void GridLabD::set_install_root(const char *install_root) {
+  // Convert C string to std::string for internal use
+  if (!install_root) {
+    return;
+  }
+  
+  std::string path_str(install_root);
+  fs::path candidate(path_str);
 
   // If it's an executable file, use it directly
   if (fs::exists(candidate) && !fs::is_directory(candidate)) {
@@ -367,7 +375,7 @@ void GridLabD::set_install_root(const std::string &install_root) {
   if (fs::is_directory(candidate)) {
     if (!validate_gridlabd_installation(candidate)) {
       throw std::runtime_error(
-          "Invalid GridLAB-D installation: " + install_root +
+          "Invalid GridLAB-D installation: " + path_str +
           " (missing required directories: share/, lib/, or gldcore/)");
     }
 
@@ -383,7 +391,7 @@ void GridLabD::set_install_root(const std::string &install_root) {
     return;
   }
 
-  throw std::runtime_error("Invalid install root: " + install_root +
+  throw std::runtime_error("Invalid install root: " + path_str +
                            " (path does not exist)");
 }
 

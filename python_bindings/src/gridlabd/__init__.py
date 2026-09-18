@@ -77,6 +77,20 @@ if "GRIDLABD_HOME" not in os.environ and "GRIDLABD_ROOT" not in os.environ:
         path_sep = ";" if os.name == "nt" else ":"
         os.environ["GLPATH"] = path_sep.join(glpath_components)
 
+# Native modules bundled with the extension must take precedence over modules
+# from an external/source-tree install root.  Mixing those binaries can abort
+# the isolated worker during INIT before it can return a protocol response.
+_bundled_search_paths = [
+    str(path) for path in (_share_dir, _package_dir / "lib") if path.is_dir()
+]
+if _bundled_search_paths:
+    _existing_glpath = os.environ.get("GLPATH", "").split(os.pathsep)
+    _glpath = _bundled_search_paths + [
+        path for path in _existing_glpath
+        if path and path not in _bundled_search_paths
+    ]
+    os.environ["GLPATH"] = os.pathsep.join(_glpath)
+
 # Import low-level C++ API
 from .gridlabd_core import (
     hello,

@@ -55,7 +55,8 @@ public:
   int64 passes = 0, tsteps = 0;
 
   // Explicitly set the GridLAB-D installation root (directory or executable)
-  static void set_install_root(const std::string &install_root);
+  // Use const char* to avoid std::string ABI/marshaling issues in Python bindings
+  static void set_install_root(const char *install_root);
 
   // Retrieve the resolved installation root directory
   static std::string get_install_root();

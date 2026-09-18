@@ -98,7 +98,9 @@ NB_MODULE(gridlabd_core, m) {
 
   nb::class_<GridLabD>(m, "GridLabD")
       .def(nb::init<>(), "Create a GridLAB-D runtime instance")
-      .def_static("set_install_root", &GridLabD::set_install_root,
+      .def_static("set_install_root", [](const std::string &path) {
+        GridLabD::set_install_root(path.c_str());
+      },
                   nb::arg("install_root"),
                   "Set the GridLAB-D installation root directory (should "
                   "contain share/ with tzinfo.txt)")

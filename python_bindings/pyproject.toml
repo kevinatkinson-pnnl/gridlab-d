@@ -18,7 +18,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering",
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.19.0",
 ]
@@ -43,18 +43,18 @@ sdist.exclude = [".git*", "*.pyc", "__pycache__", "build", "dist", ".venv"]
 
 
 [tool.cibuildwheel]
-# Build for Python 3.9 through 3.12
+# Build the supported Python versions
 build = ["cp310-*", "cp312-*", "cp314-*"]
 
-# Skip 32-bit, Windows, and musl Linux builds
-skip = ["*-win*", "*-manylinux_i686", "*-musllinux_*"]
+# Skip unsupported 32-bit and musl builds
+skip = ["*-win32", "*-manylinux_i686", "*-musllinux_*"]
 
 # Test command to verify the wheel works
 test-command = "python -c 'import gridlabd; print(gridlabd.version()); print(gridlabd.hello())'"
 
 [tool.cibuildwheel.linux]
 # Install build dependencies
-before-all = "yum install -y cmake3 patchelf || apt-get update && apt-get install -y cmake patchelf"
+before-all = "python -m pip install cmake patchelf && cmake -S {project}/.. -B {project}/../build -DCMAKE_BUILD_TYPE=Release && cmake --build {project}/../build --parallel 4"
 
 # Use manylinux_2_28 (compatible with Ubuntu 20.04+, glibc 2.28+)
 manylinux-x86_64-image = "manylinux_2_28"
@@ -62,7 +62,7 @@ manylinux-aarch64-image = "manylinux_2_28"
 
 [tool.cibuildwheel.macos]
 # Install CMake on macOS
-before-all = "brew install cmake"
+before-all = "brew install cmake && cmake -S {project}/.. -B {project}/../build -DCMAKE_BUILD_TYPE=Release && cmake --build {project}/../build --parallel 4"
 
 # Target macOS 11.0+ (Big Sur and later)
 environment = { MACOSX_DEPLOYMENT_TARGET = "11.0" }

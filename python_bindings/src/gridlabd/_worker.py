@@ -6,6 +6,7 @@ executing them against a real GridLabD C++ instance and returning results.
 """
 
 import sys
+import os
 import json
 from typing import Any
 
@@ -26,6 +27,8 @@ _TZ_OFFSETS = {
 
 def _to_iso8601(time_str: str) -> str:
     value = time_str.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        value = value[1:-1].strip()
     if re.match(r"^\d{4}-\d{2}-\d{2}T", value):
         return value
 
@@ -43,7 +46,14 @@ def _to_iso8601(time_str: str) -> str:
     return iso
 
 # Import the direct C++ binding
-from .gridlabd_core import GridLabD as DirectGridLabD, GLDErrorCode
+try:
+    from .gridlabd_core import GridLabD as DirectGridLabD, GLDErrorCode
+except ImportError as e:
+    import sys
+    sys.stderr.write(f"FATAL: Failed to import gridlabd_core: {e}\n")
+    sys.stderr.write(f"This typically means gldapi.dll or its dependencies are not accessible.\n")
+    sys.stderr.write(f"PATH={os.environ.get('PATH')}\n")
+    sys.exit(1)
 
 
 # Global instance for this worker
@@ -62,10 +72,13 @@ def handle_init(message: Message) -> Response:
     """Initialize a new GridLabD instance."""
     global _gld_instance
     try:
-        # Set install root from environment before creating instance
+        # Set install root from environment before creating instance.
+        # Keep precedence aligned with package init logic:
+        # GRIDLABD_HOME (preferred) > GRIDLABD_ROOT (backward compatibility).
         import os
-        if "GRIDLABD_ROOT" in os.environ:
-            DirectGridLabD.set_install_root(os.environ["GRIDLABD_ROOT"])
+        install_root = os.environ.get("GRIDLABD_HOME") or os.environ.get("GRIDLABD_ROOT")
+        if install_root:
+            DirectGridLabD.set_install_root(install_root)
         
         _gld_instance = DirectGridLabD()
         
@@ -918,4 +931,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        sys.stderr.write(f"WORKER FATAL ERROR: {e}\n")
+        sys.stderr.write(traceback.format_exc())
+        sys.stderr.flush()
+        sys.exit(1)

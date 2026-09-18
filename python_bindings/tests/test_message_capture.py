@@ -155,7 +155,7 @@ import sys
 import gridlabd
 
 gld = gridlabd.GridLabD()  # verbose=False by default
-gld.load("{model_path}")
+assert gld.load({str(model_path)!r}) == 0
 gld.setup_after_load()
 print("USER OUTPUT START", file=sys.stdout)
 gld.run()
@@ -186,7 +186,7 @@ import sys
 import gridlabd
 
 gld = gridlabd.GridLabD(verbose=True)
-gld.load("{model_path}")
+assert gld.load({str(model_path)!r}) == 0
 gld.setup_after_load()
 gld.run()
 """
@@ -241,7 +241,7 @@ import sys
 import gridlabd
 
 gld = gridlabd.GridLabD()  # verbose=False
-gld.load("{model_path}")
+assert gld.load({str(model_path)!r}) == 0
 gld.setup_after_load()
 
 # Print multiple user messages during simulation

@@ -2,60 +2,113 @@
 
 This package provides Python bindings for GridLAB-D, a power system simulation platform.
 
-## Installation
+## Building and installing on Windows
 
-1. **Build the GridLAB-D core** (if not already built):
-   ```bash
-   # From the repository root
-   mkdir build
-   cd build
-   cmake -DCMAKE_BUILD_TYPE=Debug ..
-   cmake --build .
-   ```
+Windows builds use 64-bit MSVC and a Release core. The Python extension and the
+core must use the same architecture and build configuration.
 
-2. **Install the Python package in development mode**:
-   ```bash
-   # From the repository root
-   cd python_bindings
-   pip install -e .
-   ```
+### Prerequisites
 
-3. **Run tests to verify installation**:
-   ```bash
-   cd python_bindings/tests
-   pytest -v
-   ```
+- 64-bit Python 3.10 or newer
+- Visual Studio 2022 or Build Tools 2022 with **Desktop development with C++**
+- CMake available from a native Windows terminal
+- Git submodules initialized with `git submodule update --init --recursive`
 
-## Native Windows development (MSVC x64)
+Use Command Prompt, PowerShell, or the x64 Native Tools prompt. Ensure `cmake`
+does not resolve to an MSYS2 installation (`where cmake` in Command Prompt or
+`Get-Command cmake` in PowerShell).
 
-Use native Windows CMake and Visual Studio 2022 C++ Build Tools. Keep MSYS2 tools
-out of the packaging build path. From PowerShell in the repository root:
+### Build the native core
 
-```powershell
-$cmake = "$env:ProgramFiles\CMake\bin\cmake.exe"
-& $cmake -S . -B out/build/windows-native -G "Visual Studio 17 2022" -A x64
-& $cmake --build out/build/windows-native --config Release --parallel 4
-python -m venv .venv-windows-api
-$python = "$PWD\.venv-windows-api\Scripts\python.exe"
-& $python -m pip install scikit-build-core nanobind numpy pytest pytest-timeout
-$env:PATH = "$env:ProgramFiles\CMake\bin;" + (($env:PATH -split ';' | Where-Object { $_ -notlike '*msys64*' }) -join ';')
-$env:CMAKE_GENERATOR = "Visual Studio 17 2022"
-$env:CMAKE_GENERATOR_PLATFORM = "x64"
-$coreBuild = (Resolve-Path out/build/windows-native).Path
-& $python -m pip install -e ./python_bindings --no-build-isolation "--config-settings=cmake.define.GRIDLABD_BUILD_DIR=$coreBuild"
-& $python -m pytest python_bindings/tests --timeout=120
+Run these commands from the repository root:
+
+```cmd
+cmake -S . -B out/build/windows-native -G "Visual Studio 17 2022" -A x64
+cmake --build out/build/windows-native --config Release --parallel 4
 ```
 
-`GRIDLABD_BUILD_DIR` selects the exact core build used by the extension. On
-Windows the extension links to `gldapi.lib`; the package bundles `gldapi.dll`,
-module DLLs, and runtime data. Editable installs locate these native assets in
-the environment's installed package directory while importing Python sources
-from this checkout. Reinstall the editable package after rebuilding the core
-so its bundled DLLs are refreshed.
+The build must produce both of these files:
 
-## Building Wheels for Distribution
+```text
+out/build/windows-native/bin/Release/gldapi.dll
+out/build/windows-native/lib/static/Release/gldapi.lib
+```
 
-To create wheel (.whl) and source distribution (.tar.gz) files for PyPI:
+### Install for development
+
+Creating a virtual environment is recommended:
+
+```cmd
+python -m venv .venv-windows-api
+.venv-windows-api\Scripts\activate
+python -m pip install --upgrade pip
+python -m pip install pytest pytest-timeout
+```
+
+Install the package from the repository root and explicitly identify the core
+build. Forward slashes in the CMake path work in both Command Prompt and
+PowerShell:
+
+```cmd
+python -m pip install --force-reinstall --config-settings=cmake.define.GRIDLABD_BUILD_DIR=C:/path/to/gridlab-d/out/build/windows-native ./python_bindings
+```
+
+For an editable install, use:
+
+```cmd
+python -m pip install --force-reinstall -e ./python_bindings --config-settings=cmake.define.GRIDLABD_BUILD_DIR=C:/path/to/gridlab-d/out/build/windows-native
+```
+
+Replace `C:/path/to/gridlab-d` with the repository's absolute path. Reinstall
+the package after rebuilding the core so the installed `gldapi.dll` and module
+DLLs are refreshed.
+
+`GRIDLABD_BUILD_DIR` prevents CMake from selecting artifacts from another build
+tree. The package links to the Release `gldapi.lib` and installs the matching
+`gldapi.dll`, model-module DLLs, and runtime data beside the Python extension.
+
+### Verify the installation
+
+From the repository root:
+
+```cmd
+python -X faulthandler -c "import gridlabd; print(gridlabd.version()); print(gridlabd.GridLabD.get_install_root())"
+python -X faulthandler -m pytest python_bindings/tests -v --tb=short
+```
+
+When the current directory is `python_bindings`, use `tests` instead of
+`python_bindings/tests` in the pytest command.
+
+### Runtime environment variables
+
+An installed package normally finds its bundled runtime without setting
+`GRIDLABD_HOME`, `GRIDLABD_ROOT`, or `GLPATH`. Old values pointing at a source
+tree can select unrelated native modules. To diagnose an older installation,
+clear them before testing:
+
+```cmd
+set GRIDLABD_HOME=
+set GRIDLABD_ROOT=
+set GLPATH=
+```
+
+PowerShell equivalents are:
+
+```powershell
+Remove-Item Env:GRIDLABD_HOME -ErrorAction SilentlyContinue
+Remove-Item Env:GRIDLABD_ROOT -ErrorAction SilentlyContinue
+Remove-Item Env:GLPATH -ErrorAction SilentlyContinue
+```
+
+Current builds place their bundled `share` and `lib` directories first in
+`GLPATH`, which prevents a source-root override from mixing incompatible module
+DLLs with the installed extension.
+
+## Building Wheels for Manual Distribution
+
+This preparation step is handled by the GitHub Actions build pipeline. For manual builds:
+
+### Linux & macOS
 
 1. **Run the preparation script** (copies built libraries into the package):
    ```bash
@@ -70,7 +123,27 @@ To create wheel (.whl) and source distribution (.tar.gz) files for PyPI:
 
    This creates both files in the `dist/` directory.
 
-**Note:** `pip install -e .` works for local development without running the preparation script because it accesses libraries directly from `../build/lib/`. However, `python -m build` creates an isolated environment and requires the prebuilt libraries to be bundled within the package directory.
+### Windows (MSVC x64)
+
+After building the Release core as described above, create a standalone wheel
+from the repository root:
+
+```cmd
+python -m pip wheel ./python_bindings --no-deps -w out/wheels --config-settings=cmake.define.GRIDLABD_BUILD_DIR=C:/path/to/gridlab-d/out/build/windows-native
+```
+
+Test the wheel in a clean virtual environment and from outside the repository,
+so the checkout cannot shadow its installed Python files:
+
+```cmd
+python -m venv out/wheel-test-env
+out\wheel-test-env\Scripts\python -m pip install --no-index --find-links out\wheels gridlabd
+cd %TEMP%
+C:\path\to\gridlab-d\out\wheel-test-env\Scripts\python -c "import gridlabd; print(gridlabd.version()); print(gridlabd.GridLabD().get_clock())"
+```
+
+GitHub Actions performs the same native Release build on `windows-2022` before
+running cibuildwheel. Windows 32-bit wheels are not supported.
 
 ## API Usage Examples
 
@@ -80,7 +153,7 @@ To create wheel (.whl) and source distribution (.tar.gz) files for PyPI:
 import gridlabd
 
 # Create a GridLAB-D instance
-gld = gridlabd.GridLabD()S
+gld = gridlabd.GridLabD()
 
 # Load a model file
 result = gld.load("path/to/model.glm")
@@ -112,7 +185,7 @@ classes = gld.get_all_classes()
 print(f"Classes in model: {classes}")
 
 # Get all objects of a specific class
-houses = gld.get_objects_by_class("house")
+houses = gld.get_object_names_by_class("house")
 print(f"Found {len(houses)} houses")
 
 # Get properties from a single object
@@ -123,7 +196,9 @@ if houses:
 # Get all objects with all their properties
 all_houses = gld.get_all_objects("house")
 for house in all_houses:
-    print(f"House {house['__name__']}: floor_area={house['floor_area']}")
+    house_name = house.get("__name__", house.get("__id__", "(unnamed)"))
+    floor_area = house.get("floor_area", "N/A")
+    print(f"House {house_name}: floor_area={floor_area}")
 
 # Get entire model as nested dictionary
 model = gld.get_model()
@@ -141,11 +216,11 @@ gld.load("model.glm")
 gld.setup_after_load()
 
 # Get objects
-houses = gld.get_objects_by_class("house")
+houses = gld.get_object_names_by_class("house")
 
 # Set a property value
 if houses:
-    result, value = gld.set_property(houses[0], "air_temperature", "72 degF")
+    result = gld.set_property(houses[0], "air_temperature", "72 degF")
     print(f"Set temperature result: {result}")
     
     # Verify the change
@@ -207,6 +282,7 @@ print(f"Found {len(errors)} errors")
 # Show C++ output on stderr (useful for debugging)
 gld = gridlabd.GridLabD(verbose=True)
 gld.load("model.glm")
+gld.setup_after_load()
 gld.run()
 
 # Messages are still captured even in verbose mode
@@ -226,4 +302,3 @@ gld.clear_messages()
 gld.set_message_capture_limit(5000)
 limit = gld.get_message_capture_limit()
 ```
-   

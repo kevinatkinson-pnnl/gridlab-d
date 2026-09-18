@@ -73,12 +73,29 @@ endif()
 set(GRIDLABD_API_LIBRARY "${GRIDLABD_LIB_DIR}/${GRIDLABD_API_NAME}")
 if(WIN32)
     # MSVC links against the import library, not the runtime DLL.
-    find_library(GRIDLABD_API_IMPORT_LIBRARY NAMES gldapi
-        PATHS "${GRIDLABD_BUILD_DIR}/lib/static/${CMAKE_BUILD_TYPE}"
-              "${GRIDLABD_BUILD_DIR}/lib/static/Release"
-              "${GRIDLABD_BUILD_DIR}/lib/static"
-              "${GRIDLABD_BUILD_DIR}/lib"
-        NO_DEFAULT_PATH REQUIRED)
+    # Select the import library from the same configuration as the runtime DLL.
+    get_filename_component(_gld_runtime_config "${GRIDLABD_LIB_DIR}" NAME)
+    if(_gld_runtime_config STREQUAL "bin")
+        set(_gld_runtime_config "")
+    endif()
+    set(_lib_candidates
+        "${GRIDLABD_BUILD_DIR}/lib/static/${_gld_runtime_config}/gldapi.lib"
+        "${GRIDLABD_BUILD_DIR}/lib/static/gldapi.lib"
+        "${GRIDLABD_BUILD_DIR}/lib/gldapi.lib")
+    
+    set(GRIDLABD_API_IMPORT_LIBRARY "")
+    foreach(_lib_path IN LISTS _lib_candidates)
+        if(EXISTS "${_lib_path}")
+            set(GRIDLABD_API_IMPORT_LIBRARY "${_lib_path}")
+            message(STATUS "Found GridLAB-D import library: ${GRIDLABD_API_IMPORT_LIBRARY}")
+            break()
+        endif()
+    endforeach()
+    
+    if(NOT GRIDLABD_API_IMPORT_LIBRARY)
+        message(FATAL_ERROR "GridLAB-D import library (gldapi.lib) not found in:\n${_lib_candidates}\nBuild directory: ${GRIDLABD_BUILD_DIR}")
+    endif()
+    
     set(GRIDLABD_API_LINK_LIBRARY "${GRIDLABD_API_IMPORT_LIBRARY}")
 else()
     set(GRIDLABD_API_LINK_LIBRARY "${GRIDLABD_API_LIBRARY}")
@@ -120,8 +137,8 @@ target_include_directories(gridlabd_core PRIVATE
 )
 
 target_compile_definitions(gridlabd_core PRIVATE HAVE_CONFIG_H)
-if(DEFINED SKBUILD_PROJECT_VERSION)
-    target_compile_definitions(gridlabd_core PRIVATE VERSION_INFO=${SKBUILD_PROJECT_VERSION})
+if(DEFINED SKBUILD_PROJECT_VERSION_FULL)
+    target_compile_definitions(gridlabd_core PRIVATE VERSION_INFO=${SKBUILD_PROJECT_VERSION_FULL})
 endif()
 if(WIN32)
     target_compile_definitions(gridlabd_core PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)

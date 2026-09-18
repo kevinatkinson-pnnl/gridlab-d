@@ -21,9 +21,24 @@ import tempfile
 from pathlib import Path
 
 import gridlabd
+import pytest
 
 # Get repository root once
 REPO_ROOT = Path(__file__).parent.parent.parent.resolve()
+
+
+@pytest.fixture(autouse=True)
+def restore_runtime_configuration():
+    keys = ("GRIDLABD_HOME", "GRIDLABD_ROOT", "GLPATH")
+    original = {key: os.environ.get(key) for key in keys}
+    original_root = gridlabd.GridLabD.get_install_root()
+    yield
+    gridlabd.GridLabD.set_install_root(original_root)
+    for key, value in original.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
 
 
 def test_default_behavior():
@@ -128,6 +143,7 @@ def test_validation_nonexistent_path():
     """Test that validation rejects nonexistent paths."""
     print("\n[Test 4] Validation rejects nonexistent paths")
     
+    original = {key: os.environ.get(key) for key in ('GRIDLABD_HOME', 'GRIDLABD_ROOT')}
     nonexistent_path = '/nonexistent/path/xyz123456789'
     
     try:
@@ -137,6 +153,7 @@ def test_validation_nonexistent_path():
     except RuntimeError as e:
         print(f"  ✓ Properly rejected: {str(e)[:60]}...")
         assert 'Invalid install root' in str(e)
+        assert {key: os.environ.get(key) for key in original} == original
 
 
 def test_validation_empty_directory():

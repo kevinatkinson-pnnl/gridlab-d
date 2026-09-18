@@ -69,8 +69,6 @@ def _normalize_time_input(value: str) -> str:
     return value
 
 
-<<<<<<< HEAD
-=======
 def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
     """Parse an ISO 8601 datetime string, normalizing timezone-aware values."""
     if not value or not isinstance(value, str):
@@ -154,9 +152,6 @@ def _is_stoptime_blocked_step(
         return False
 
     return before_dt >= stop_dt and after_dt == before_dt
-
-
->>>>>>> 453514500 (#1725  run() updated to parse ISO time format)
 class IsolatedGridLabD:
     """
     GridLabD wrapper that runs in an isolated subprocess.
@@ -469,10 +464,6 @@ class IsolatedGridLabD:
         return response.result
     
     # Execution methods
-<<<<<<< HEAD
-    def run(self, start_time: Optional[float] = None, stop_time: Optional[float] = None) -> int:
-        """Run the simulation optionally bounding time interval."""
-=======
     def run(
         self,
         start_time: Optional[float | str] = None,
@@ -490,7 +481,6 @@ class IsolatedGridLabD:
             The underlying C++ run API accepts numeric timestamps. String
             inputs are converted to timestamps in the wrapper before dispatch.
         """
->>>>>>> 453514500 (#1725  run() updated to parse ISO time format)
         if self.get_object_count() == 0:
             raise RuntimeError("Cannot run simulation: no objects loaded in model")
 
@@ -529,11 +519,29 @@ class IsolatedGridLabD:
         if self.get_object_count() == 0:
             raise RuntimeError("Cannot step simulation: no objects loaded in model")
 
+        _, before_step_time = self.get_time()
+        stop_time = self.get_stoptime()
+
         response = self._send_command(Command.STEP, {})
         if not response.success:
             raise RuntimeError(response.error)
 
-        return response.result["code"], gld_to_iso(response.result["time"])
+        code = response.result["code"]
+        step_time = gld_to_iso(response.result["time"])
+
+        if code == 0 and _is_stoptime_blocked_step(before_step_time, step_time, stop_time):
+            # Emit a default warning even when verbose=False so users can see the stop-time block.
+            print(
+                "GridLAB-D warning: step() was blocked at stoptime; "
+                f"simulation remains at {step_time}.",
+                file=sys.stderr,
+                flush=True,
+            )
+            from .gridlabd_core import GLDErrorCode
+
+            return int(GLDErrorCode.TIME_STEP_ERROR.value), step_time
+
+        return code, step_time
     
     def step_to(self, target_time_str: str) -> tuple[int, Optional[str]]:
         """Step the simulation to a specific timestamp.

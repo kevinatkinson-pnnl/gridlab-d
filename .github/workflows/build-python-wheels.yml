@@ -55,7 +55,7 @@ jobs:
         env:
           CIBW_SKIP: "*-manylinux_i686 *-musllinux_* *-win32"
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
-          CIBW_TEST_COMMAND: python -c "import gridlabd; print(gridlabd.version()); print(gridlabd.hello())"
+          CIBW_TEST_COMMAND: python -c "import gridlabd; print(gridlabd.version()); print(gridlabd.hello()); g = gridlabd.GridLabD(); print(g.get_clock())"
           CIBW_TEST_REQUIRES: numpy
 
       - name: Build wheels on Windows
@@ -65,7 +65,7 @@ jobs:
         env:
           CIBW_SKIP: "*-win32"
           CIBW_CONFIG_SETTINGS: "cmake.define.GRIDLABD_BUILD_DIR=${{ github.workspace }}/out/build/ci-windows"
-          CIBW_TEST_COMMAND: python -c "import gridlabd; print(gridlabd.version()); print(gridlabd.hello())"
+          CIBW_TEST_COMMAND: python -c "import gridlabd; print(gridlabd.version()); print(gridlabd.hello()); g = gridlabd.GridLabD(); print(g.get_clock())"
           CIBW_TEST_REQUIRES: numpy
       
       - uses: actions/upload-artifact@v4

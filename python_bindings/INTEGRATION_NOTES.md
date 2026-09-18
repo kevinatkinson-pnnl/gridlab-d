@@ -24,6 +24,11 @@ Additional fixes found during validation:
 - Wheel CI builds the native core and all modules before packaging; macOS uses portable CPU counts and Linux-only repair steps stay Linux-only.
 - Removed a job-level matrix condition: GitHub evaluates job conditions before expanding the matrix ([workflow syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)).
 - Updated cibuildwheel to 3.3.0 for the existing Python 3.14 build target ([changelog](https://cibuildwheel.pypa.io/en/stable/changelog/)).
+- Added Windows x64 wheel builds to the cross-platform cibuildwheel workflow.
+- Wheel smoke tests now create an isolated worker and read its clock, covering native DLL loading and worker startup in addition to importing the extension.
+- Bundled runtime paths take precedence over source-tree module paths, preventing `GRIDLABD_HOME` or `GRIDLABD_ROOT` overrides from mixing incompatible DLLs during worker initialization.
+- Removed unconditional installation-validation output from stderr so non-verbose message capture remains silent.
+- Removed the duplicate legacy TestPyPI workflow; `build-python-wheels.yml` is now the single cross-platform build and publishing workflow.
 
 Validation is on Windows x64 with MSVC Release and Python 3.12. Linux/macOS workflows are statically checked but have not been executed from this task. No packages have been published.
 

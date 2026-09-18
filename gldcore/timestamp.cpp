@@ -59,7 +59,7 @@
 #endif
 
 #ifndef R_OK
-#define R_OK 0x02
+#define R_OK 0x04
 #endif
 
 #ifndef F_OK
@@ -770,6 +770,21 @@ int tz_info(char *tzspec, char *tzname, char *std, char *dst, time_t *offset)
     int rv = 0;
     memset(buf1, 0, sizeof(buf1));
     memset(buf2, 0, sizeof(buf2));
+
+    // Handle special case for UTC (no offset)
+    if (strcmp(tzspec, "UTC") == 0)
+    {
+        hours = 0;
+        minutes = 0;
+        strcpy(buf1, "UTC");
+        if (std != nullptr)
+            strcpy(std, "UTC");
+        if (dst != nullptr)
+            strcpy(dst, "UTC");
+        if (offset != nullptr)
+            *offset = 0;
+        return 1;
+    }
 
     if ((strchr(tzspec, ':') != nullptr) &&
         (sscanf(tzspec, "%[A-Z]%d:%d%[A-Z]", buf1, &hours, &minutes, buf2) < 3))

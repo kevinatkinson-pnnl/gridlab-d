@@ -34,7 +34,7 @@ EXPORT int create_csv_reader(OBJECT **obj, OBJECT *parent){
 }
 
 EXPORT int init_csv_reader(OBJECT **obj, OBJECT *parent){
-	csv_reader *my = object_data<csv_reader>(obj) ;
+	csv_reader *my = object_data<csv_reader>(*obj) ;
 	return 1; // let the climate object cause the file to open
 }
 

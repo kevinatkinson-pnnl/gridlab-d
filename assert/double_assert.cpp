@@ -18,12 +18,11 @@ EXPORT_INIT(double_assert);
 EXPORT_COMMIT(double_assert);
 
 CLASS *double_assert::oclass = nullptr;
-// double_assert *double_assert::defaults = nullptr;
-static double_assert defaults_storage; // POD storage for defaults
-double_assert *double_assert::defaults = &defaults_storage;
+double_assert *double_assert::defaults = nullptr;
 
 double_assert::double_assert(MODULE *module)
 {
+    defaults = this;
     if (oclass == nullptr)
     {
         // register to receive notice for first top down. bottom up, and second top
@@ -59,37 +58,26 @@ double_assert::double_assert(MODULE *module)
             throw msg;
         }
 
-        // defaults = this;
         status = ASSERT_TRUE;
         within = 0.0;
         within_mode = IN_ABS;
         value = 0.0;
         once = ONCE_FALSE;
         once_value = 0;
-        target.erase();
+        std::memset(target, 0, sizeof(target));
     }
 }
 
 /* Object creation is called once for each object that is created by the core */
 int double_assert::create(void)
 {
-    // memcpy(this, defaults, sizeof(*this));
     status = defaults->status;
     within = defaults->within;
     within_mode = defaults->within_mode;
     value = defaults->value;
     once = defaults->once;
     once_value = defaults->once_value;
-
-    // Make sure target is a clean string
-    if (defaults->target[0] != '\0')
-        target.copy_from(defaults->target);
-
-    gl_output("double_assert defaults: status=%d value=%g within=%g "
-              "within_mode=%d once=%d target='%s' once_value=%g",
-              static_cast<int>(status), value, within,
-              static_cast<int>(within_mode), static_cast<int>(once),
-              target.get_string(), once_value);
+    std::memcpy(target, defaults->target, sizeof(target));
 
     return 1; /* return 1 on success, 0 on failure */
 }

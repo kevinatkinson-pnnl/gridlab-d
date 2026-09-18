@@ -1,0 +1,4 @@
+GridLAB-D Version Info:
+	GridLAB-D 5.3.0-20706 (393da7d45:kevin_fixes:Modified) 64-bit WINDOWS RELEASE
+
+Autotest Failed Results:

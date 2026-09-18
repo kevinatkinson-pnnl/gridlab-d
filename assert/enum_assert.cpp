@@ -23,6 +23,7 @@ CLASS *enum_assert::oclass = nullptr;
 enum_assert *enum_assert::defaults = nullptr;
 
 enum_assert::enum_assert(MODULE *module) {
+  defaults = this;
   if (oclass == nullptr) {
     // register to receive notice for first top down. bottom up, and second top
     // down synchronizations
@@ -48,10 +49,9 @@ enum_assert::enum_assert(MODULE *module) {
       snprintf(msg, sizeof(msg), "unable to publish properties in %s", __FILE__);
       throw msg;
     }
-
-    defaults = this;
     status = ASSERT_TRUE;
     value = 0;
+    std::memset(target, 0, sizeof(target));
   }
 }
 

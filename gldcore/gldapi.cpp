@@ -55,6 +55,31 @@ namespace
     std::optional<fs::path> g_install_root_override;
     std::optional<fs::path> g_executable_override;
 
+    fs::path infer_install_root(const fs::path &exec_path)
+    {
+        fs::path bin_dir = exec_path.parent_path();
+        fs::path root = bin_dir.parent_path();
+        std::string leaf = bin_dir.filename().string();
+
+        if ((leaf == "Debug" || leaf == "Release" || leaf == "RelWithDebInfo" ||
+             leaf == "MinSizeRel") &&
+            bin_dir.parent_path().filename() == "bin")
+        {
+            root = bin_dir.parent_path().parent_path();
+        }
+        else if (leaf == "bin")
+        {
+            root = bin_dir.parent_path();
+        }
+
+        if (root.empty())
+        {
+            root = bin_dir;
+        }
+
+        return root;
+    }
+
     std::string object_identifier(const OBJECT *obj)
     {
         if (obj == nullptr)
@@ -155,11 +180,7 @@ namespace
     {
         fs::path exec = weakly_canonical_or_self(exec_path);
         fs::path bin_dir = exec.parent_path();
-        fs::path root = bin_dir.parent_path();
-        if (root.empty())
-        {
-            root = bin_dir;
-        }
+        fs::path root = infer_install_root(exec);
 
         global_gl_executable = exec;
         global_gl_bin = bin_dir;

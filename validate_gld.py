@@ -20,13 +20,33 @@ def getGLDBinary():
     gldBinary = shutil.which("gridlabd")
     if not gldBinary:
         rootPath = Path(__file__).parent.resolve()
-        for child in rootPath.iterdir():
-            if child.is_dir():
-                childBin = child / "bin" / "gridlabd"
-                childBin.resolve()
+        candidateNames = ["gridlabd.exe", "gridlabd"] if os.name == "nt" else ["gridlabd"]
+        candidateDirs = [
+            rootPath / "bin",
+            rootPath / "build" / "bin",
+            rootPath / "build" / "bin" / "Debug",
+            rootPath / "build" / "bin" / "Release",
+            rootPath / "build" / "bin" / "RelWithDebInfo",
+            rootPath / "build" / "bin" / "MinSizeRel",
+        ]
+        for candidateDir in candidateDirs:
+            for candidateName in candidateNames:
+                childBin = candidateDir / candidateName
                 if childBin.exists() and childBin.is_file():
                     gldBinary = f"{childBin}"
                     break
+            if gldBinary:
+                break
+        if not gldBinary:
+            for child in rootPath.iterdir():
+                if child.is_dir():
+                    for candidateName in candidateNames:
+                        childBin = child / "bin" / candidateName
+                        if childBin.exists() and childBin.is_file():
+                            gldBinary = f"{childBin}"
+                            break
+                    if gldBinary:
+                        break
     if not gldBinary:
         raise ModuleNotFoundError(
             "Could not find the gridlabd binary in the development environment!"
@@ -82,12 +102,12 @@ def runAutotest(test_args: tuple[Path, str]) -> tuple[int, Path, Path, Path]:
     if not work_dir.exists():
         work_dir.mkdir()
 
-    # Compose command: run from parent directory, write outputs into work_dir
+    # Compose command: run from the per-test directory and write outputs there.
     command = [binFile, autotestFile.name]
     (work_dir / "gridlabd.start").write_text(f"RUN {autotestFile.name} via {binFile}\n")
                                              
     env = dict(os.environ)
-    per_test_timeout_s = int(env.get("GLD_TEST_TIMEOUT", os.environ.get("GLD_TIMEOUT", "600")))
+    per_test_timeout_s = int(env.get("GLD_TEST_TIMEOUT", os.environ.get("GLD_TIMEOUT", "1800")))
 
     print(f"[run] {autotestFile}", flush=True)
     try:

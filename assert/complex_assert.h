@@ -31,8 +31,6 @@ public:
   // GL_ATOMIC(double,within);
 
   complex_assert() {
-    // Initialize default values if needed
-    // Initialize default values here
     status = ASSERT_TRUE;
     within = 0.0;
     value = 0.0;
@@ -41,13 +39,9 @@ public:
     operation = FULL;
     strcpy(target, "");
   }
-  ~complex_assert() { defaults = nullptr; }
+  ~complex_assert() = default;
 
   static inline complex_assert *get_defaults() {
-    // if (!defaults)
-    // {
-    //     defaults = new complex_assert(); // Initialize lazily
-    // }
     return defaults;
   }
 

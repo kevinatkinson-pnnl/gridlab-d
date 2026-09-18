@@ -88,7 +88,7 @@
 #endif
 
 #ifndef R_OK
-#define R_OK 0x02
+#define R_OK 0x04
 #endif
 
 #ifndef F_OK

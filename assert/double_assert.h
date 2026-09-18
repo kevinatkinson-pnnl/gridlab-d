@@ -28,22 +28,19 @@ public:
 
 public:
   static inline double_assert *get_defaults() {
-    // if (!defaults) {
-    //     defaults = new double_assert(); // Initialize lazily
-    // }
     return defaults;
   }
 
   double_assert() {
-    defaults->status = ASSERT_TRUE;
-    defaults->within = 0.0;
-    defaults->within_mode = IN_ABS;
-    defaults->value = 0.0;
-    defaults->once = ONCE_FALSE;
-    defaults->once_value = 0.0;
-    std::memset(defaults->target, 0, sizeof(defaults->target));
+    status = ASSERT_TRUE;
+    within = 0.0;
+    within_mode = IN_ABS;
+    value = 0.0;
+    once = ONCE_FALSE;
+    once_value = 0.0;
+    std::memset(target, 0, sizeof(target));
   }
-  ~double_assert() {}
+  ~double_assert() = default;
 
 protected:
   enumeration status;      // Member variable of type `enumeration`.

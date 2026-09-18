@@ -52,6 +52,31 @@
 
 namespace fs = std::filesystem;
 
+static fs::path infer_install_root(const fs::path &exec_path)
+{
+    fs::path bin_dir = exec_path.parent_path();
+    fs::path root_path = bin_dir.parent_path();
+    std::string leaf = bin_dir.filename().string();
+
+    if ((leaf == "Debug" || leaf == "Release" || leaf == "RelWithDebInfo" ||
+         leaf == "MinSizeRel") &&
+        bin_dir.parent_path().filename() == "bin")
+    {
+        root_path = bin_dir.parent_path().parent_path();
+    }
+    else if (leaf == "bin")
+    {
+        root_path = bin_dir.parent_path();
+    }
+
+    if (root_path.empty())
+    {
+        root_path = bin_dir;
+    }
+
+    return root_path;
+}
+
 void delete_pidfile(void)
 {
     unlink(global_pidfile);
@@ -128,7 +153,7 @@ int main(int argc,     /**< the number entries on command-line argument list \p 
     int i, pos = 0;
 
     global_gl_executable = findExecutable("gridlabd", argv[0], getenv("PATH"));
-    auto root_path = global_gl_executable.parent_path().parent_path();
+    auto root_path = infer_install_root(global_gl_executable);
     global_gl_share = root_path / "share";
     global_gl_include = root_path / "include";
     global_gl_lib = root_path / "lib";

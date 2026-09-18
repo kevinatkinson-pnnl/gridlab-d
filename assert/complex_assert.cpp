@@ -20,11 +20,11 @@ EXPORT_INIT(complex_assert);
 EXPORT_COMMIT(complex_assert);
 
 CLASS *complex_assert::oclass = nullptr;
-static complex_assert defaults_storage; // POD storage for defaults
-complex_assert *complex_assert::defaults = &defaults_storage;
+complex_assert *complex_assert::defaults = nullptr;
 
 complex_assert::complex_assert(MODULE *module)
 {
+    defaults = this;
     if (oclass == nullptr)
     {
         // register to receive notice for first top down. bottom up, and second top
@@ -63,14 +63,13 @@ complex_assert::complex_assert(MODULE *module)
             throw msg;
         }
 
-        // status = ASSERT_TRUE;
-        // within = 0.0;
-        // value = 0.0;
-        // once = ONCE_FALSE;
-        // once_value = 0;
-        // operation = FULL;
-
-        // memcpy(this, defaults, sizeof(complex_assert));
+        status = ASSERT_TRUE;
+        within = 0.0;
+        value = 0.0;
+        once = ONCE_FALSE;
+        once_value = 0;
+        operation = FULL;
+        strcpy(target, "");
     }
 }
 

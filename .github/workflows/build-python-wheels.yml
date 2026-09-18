@@ -5,9 +5,7 @@ on:
     branches:
       - main
       - develop
-      - pypi_build
-    tags:
-      - 'v*'
+      - feature/1478
   pull_request:
     branches:
       - main
@@ -86,7 +84,7 @@ jobs:
     environment: testpypi
     permissions:
       id-token: write
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/pypi_build')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/feature/1478')
     
     steps:
       - uses: actions/download-artifact@v4
@@ -100,3 +98,22 @@ jobs:
         with:
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true
+
+  upload_pypi:
+    name: Upload to PyPI
+    needs: [build_wheels]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

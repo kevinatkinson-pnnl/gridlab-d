@@ -29,6 +29,7 @@ Additional fixes found during validation:
 - Bundled runtime paths take precedence over source-tree module paths, preventing `GRIDLABD_HOME` or `GRIDLABD_ROOT` overrides from mixing incompatible DLLs during worker initialization.
 - Removed unconditional installation-validation output from stderr so non-verbose message capture remains silent.
 - Removed the duplicate legacy TestPyPI workflow; `build-python-wheels.yml` is now the single cross-platform build and publishing workflow.
+- Configured trusted publishing so pushes created by merges to `develop` and `feature/1478` publish to TestPyPI, while pushes to `main` publish to production PyPI.
 
 Validation is on Windows x64 with MSVC Release and Python 3.12. Linux/macOS workflows are statically checked but have not been executed from this task. No packages have been published.
 

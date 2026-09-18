@@ -143,7 +143,9 @@ C:\path\to\gridlab-d\out\wheel-test-env\Scripts\python -c "import gridlabd; prin
 ```
 
 GitHub Actions performs the same native Release build on `windows-2022` before
-running cibuildwheel. Windows 32-bit wheels are not supported.
+running cibuildwheel. The workflow explicitly initializes the MSVC x64 developer
+environment, so it does not depend on an interactive Native Tools prompt.
+Windows 32-bit wheels are not supported.
 
 ## API Usage Examples
 

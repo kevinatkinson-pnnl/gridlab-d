@@ -69,6 +69,94 @@ def _normalize_time_input(value: str) -> str:
     return value
 
 
+<<<<<<< HEAD
+=======
+def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    """Parse an ISO 8601 datetime string, normalizing timezone-aware values."""
+    if not value or not isinstance(value, str):
+        return None
+
+    text = value.strip()
+    if not text:
+        return None
+
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+    if dt.tzinfo is not None:
+        dt = dt.replace(tzinfo=None)
+    return dt
+
+
+def _parse_iso_datetime_with_tz(value: Optional[str]) -> Optional[datetime]:
+    """Parse an ISO 8601 datetime string and preserve timezone when present."""
+    if not value or not isinstance(value, str):
+        return None
+
+    text = value.strip()
+    if not text:
+        return None
+
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _coerce_run_bound_to_timestamp(
+    value: Optional[float | str],
+    reference_tz,
+) -> Optional[float]:
+    """Convert run() bound inputs (float or ISO string) to numeric timestamps."""
+    if value is None:
+        return None
+
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+
+        dt = _parse_iso_datetime_with_tz(text)
+        if dt is None:
+            raise ValueError(f"Invalid ISO 8601 time value for run bound: {value!r}")
+
+        if dt.tzinfo is None and reference_tz is not None:
+            dt = dt.replace(tzinfo=reference_tz)
+
+        return float(dt.timestamp())
+
+    raise TypeError(
+        f"run bounds must be float, str, or None; got {type(value).__name__}"
+    )
+
+
+def _is_stoptime_blocked_step(
+    before_step_time: Optional[str],
+    after_step_time: Optional[str],
+    stop_time: Optional[str],
+) -> bool:
+    """Return True when step() is a no-op because simulation is already at/after stoptime."""
+    before_dt = _parse_iso_datetime(before_step_time)
+    after_dt = _parse_iso_datetime(after_step_time)
+    stop_dt = _parse_iso_datetime(stop_time)
+    if before_dt is None or after_dt is None or stop_dt is None:
+        return False
+
+    return before_dt >= stop_dt and after_dt == before_dt
+
+
+>>>>>>> 453514500 (#1725  run() updated to parse ISO time format)
 class IsolatedGridLabD:
     """
     GridLabD wrapper that runs in an isolated subprocess.
@@ -381,13 +469,43 @@ class IsolatedGridLabD:
         return response.result
     
     # Execution methods
+<<<<<<< HEAD
     def run(self, start_time: Optional[float] = None, stop_time: Optional[float] = None) -> int:
         """Run the simulation optionally bounding time interval."""
+=======
+    def run(
+        self,
+        start_time: Optional[float | str] = None,
+        stop_time: Optional[float | str] = None,
+    ) -> int:
+        """Run the simulation, optionally bounding the timestamp interval.
+
+        Args:
+            start_time: Optional bound as either numeric GridLAB-D timestamp
+                or ISO 8601 string.
+            stop_time: Optional bound as either numeric GridLAB-D timestamp
+                or ISO 8601 string.
+
+        Note:
+            The underlying C++ run API accepts numeric timestamps. String
+            inputs are converted to timestamps in the wrapper before dispatch.
+        """
+>>>>>>> 453514500 (#1725  run() updated to parse ISO time format)
         if self.get_object_count() == 0:
             raise RuntimeError("Cannot run simulation: no objects loaded in model")
+
+        reference_tz = None
+        if isinstance(start_time, str) or isinstance(stop_time, str):
+            _, current_time = self.get_time()
+            current_dt = _parse_iso_datetime_with_tz(current_time)
+            reference_tz = current_dt.tzinfo if current_dt is not None else None
+
+        start_ts = _coerce_run_bound_to_timestamp(start_time, reference_tz)
+        stop_ts = _coerce_run_bound_to_timestamp(stop_time, reference_tz)
+
         response = self._send_command(Command.RUN, {
-            "start_time": start_time,
-            "stop_time": stop_time
+            "start_time": start_ts,
+            "stop_time": stop_ts,
         })
         if not response.success:
             raise RuntimeError(response.error)

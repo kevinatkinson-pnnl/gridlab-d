@@ -26,6 +26,33 @@ This package provides Python bindings for GridLAB-D, a power system simulation p
    pytest -v
    ```
 
+## Native Windows development (MSVC x64)
+
+Use native Windows CMake and Visual Studio 2022 C++ Build Tools. Keep MSYS2 tools
+out of the packaging build path. From PowerShell in the repository root:
+
+```powershell
+$cmake = "$env:ProgramFiles\CMake\bin\cmake.exe"
+& $cmake -S . -B out/build/windows-native -G "Visual Studio 17 2022" -A x64
+& $cmake --build out/build/windows-native --config Release --parallel 4
+python -m venv .venv-windows-api
+$python = "$PWD\.venv-windows-api\Scripts\python.exe"
+& $python -m pip install scikit-build-core nanobind numpy pytest pytest-timeout
+$env:PATH = "$env:ProgramFiles\CMake\bin;" + (($env:PATH -split ';' | Where-Object { $_ -notlike '*msys64*' }) -join ';')
+$env:CMAKE_GENERATOR = "Visual Studio 17 2022"
+$env:CMAKE_GENERATOR_PLATFORM = "x64"
+$coreBuild = (Resolve-Path out/build/windows-native).Path
+& $python -m pip install -e ./python_bindings --no-build-isolation "--config-settings=cmake.define.GRIDLABD_BUILD_DIR=$coreBuild"
+& $python -m pytest python_bindings/tests --timeout=120
+```
+
+`GRIDLABD_BUILD_DIR` selects the exact core build used by the extension. On
+Windows the extension links to `gldapi.lib`; the package bundles `gldapi.dll`,
+module DLLs, and runtime data. Editable installs locate these native assets in
+the environment's installed package directory while importing Python sources
+from this checkout. Reinstall the editable package after rebuilding the core
+so its bundled DLLs are refreshed.
+
 ## Building Wheels for Distribution
 
 To create wheel (.whl) and source distribution (.tar.gz) files for PyPI:

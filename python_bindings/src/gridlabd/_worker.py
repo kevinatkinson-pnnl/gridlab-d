@@ -412,12 +412,35 @@ def handle_get_property(message: Message) -> Response:
     try:
         object_name = message.args["object_name"]
         property_name = message.args["property_name"]
+        typed = bool(message.args.get("typed", False))
         code, value = _gld_instance.get_property(
             object_name,
             property_name
         )
         code_int = int(code) if isinstance(code, int) else int(code.value)
-        if bool(message.args.get("typed", False)) and code_int == 0:
+
+        # Compatibility fallback for feeders where measured_real_power is not
+        # directly published on the requested object (e.g., substation).
+        # Many network-node/substation objects publish distribution_power*
+        # (complex VA) rather than measured_real_power (real W).
+        if code_int != 0 and property_name == "measured_real_power":
+            for alt_name in (
+                "measured_power",
+                "distribution_power",
+                "distribution_power_A",
+                "distribution_power_B",
+                "distribution_power_C",
+                "power",
+            ):
+                alt_code, alt_value = _gld_instance.get_property(object_name, alt_name)
+                alt_code_int = int(alt_code) if isinstance(alt_code, int) else int(alt_code.value)
+                if alt_code_int == 0:
+                    code_int = 0
+                    value = alt_value
+                    property_name = alt_name
+                    break
+
+        if typed and code_int == 0:
             prop_type, unit = _get_prop_type_unit(object_name, property_name)
             value = _convert_value(value, prop_type, unit)
         return Response(success=True, result={"code": code_int, "value": value})
@@ -670,10 +693,31 @@ def handle_get_object_properties_detailed(message: Message) -> Response:
 def handle_set_property(message: Message) -> Response:
     """Set a property value."""
     try:
+        detailed = bool(message.args.get("detailed", False))
+        object_name = message.args["object_name"]
+        property_name = message.args["property_name"]
+        requested_value = message.args["value"]
+
+        if detailed:
+            details = _gld_instance.set_property_detailed(
+                object_name,
+                property_name,
+                requested_value,
+            )
+            return Response(
+                success=True,
+                result={
+                    "code": int(details.get("code", 0)),
+                    "normalized": bool(details.get("normalized", False)),
+                    "requested_value": str(details.get("requested_value", requested_value)),
+                    "applied_value": str(details.get("applied_value", requested_value)),
+                },
+            )
+
         code = _gld_instance.set_property(
-            message.args["object_name"],
-            message.args["property_name"],
-            message.args["value"]
+            object_name,
+            property_name,
+            requested_value,
         )
         return Response(success=True, result=int(code) if isinstance(code, int) else int(code.value))
     except Exception as e:
@@ -683,12 +727,22 @@ def handle_set_property(message: Message) -> Response:
 def handle_get_properties_by_class(message: Message) -> Response:
     """Get property values from all objects of a class."""
     try:
-        result = _gld_instance.get_properties_by_class(
-            message.args["class_name"],
-            message.args["property_name"]
-        )
+        class_name = message.args["class_name"]
+        property_name = message.args["property_name"]
+
+        # Some builds/classes don't expose "name" through the low-level
+        # class-property query path even though object metadata has __name__.
+        # Keep API behavior consistent by mapping each object name/ID to itself.
+        if property_name == "name":
+            object_names = _gld_instance.get_objects_by_class(class_name)
+            result = {obj_name: obj_name for obj_name in object_names}
+        else:
+            result = _gld_instance.get_properties_by_class(
+                class_name,
+                property_name
+            )
+
         if bool(message.args.get("typed", False)) and isinstance(result, dict):
-            property_name = message.args["property_name"]
             typed_result = {}
             for obj_name, raw_value in result.items():
                 prop_type, unit = _get_prop_type_unit(obj_name, property_name)
@@ -737,6 +791,12 @@ def handle_get_messages(message: Message) -> Response:
     """Get all captured warning/error/debug messages."""
     try:
         result = _gld_instance.get_messages()
+        if isinstance(result, list):
+            for entry in result:
+                if isinstance(entry, dict):
+                    timestamp = entry.get("timestamp")
+                    if isinstance(timestamp, str) and timestamp.strip():
+                        entry["timestamp"] = _to_iso8601(timestamp)
         return Response(success=True, result=result)
     except Exception as e:
         return Response(success=False, error=str(e))
@@ -832,19 +892,9 @@ COMMAND_HANDLERS = {
 
 def main():
     """Main worker loop - reads commands from stdin, executes them, writes responses to stdout."""
-    # CRITICAL: Redirect C++ stdout to stderr to prevent GridLAB-D debug output
-    # from corrupting the JSON protocol on stdout
-    import os
-    # Duplicate stdout to a safe place, then redirect stdout fd to stderr
-    original_stdout_fd = os.dup(1)  # Save original stdout
-    os.dup2(2, 1)  # Redirect stdout (fd 1) to stderr (fd 2)
-    
-    # Create a Python file object from the saved stdout for protocol communication
-    protocol_out = os.fdopen(original_stdout_fd, 'w', buffering=1)
-    
     # Send READY signal to parent to indicate worker is ready to receive commands
-    protocol_out.write("READY\n")
-    protocol_out.flush()
+    sys.stdout.write("READY\n")
+    sys.stdout.flush()
     
     for line in sys.stdin:
         try:
@@ -856,14 +906,14 @@ def main():
             else:
                 response = handler(message)
             
-            protocol_out.write(response.to_json() + "\n")
-            protocol_out.flush()
+            sys.stdout.write(response.to_json() + "\n")
+            sys.stdout.flush()
             if message.command in (Command.EXIT_GLD, Command.FINALIZE):
                 break
         except Exception as e:
             response = Response(success=False, error=f"Worker error: {str(e)}")
-            protocol_out.write(response.to_json() + "\n")
-            protocol_out.flush()
+            sys.stdout.write(response.to_json() + "\n")
+            sys.stdout.flush()
 
 
 

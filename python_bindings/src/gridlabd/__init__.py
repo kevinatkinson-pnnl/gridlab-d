@@ -18,11 +18,20 @@ Example usage:
 
 import os
 from pathlib import Path
+from importlib.util import find_spec
 
 # Set up GRIDLABD_HOME/GRIDLABD_ROOT to point to data files
 # Priority: 1) GRIDLABD_HOME (user custom), 2) GRIDLABD_ROOT (backward compat), 
 #           3) Package share/ dir, 4) Development source tree
-_package_dir = Path(__file__).parent
+# Editable installs keep Python sources and installed native assets in different directories.
+_extension_spec = find_spec(__name__ + ".gridlabd_core")
+_package_dir = (Path(_extension_spec.origin).parent
+                if _extension_spec and _extension_spec.origin else Path(__file__).parent)
+_dll_directories = []
+if os.name == "nt":
+    for _dll_dir in (_package_dir, _package_dir / "lib"):
+        if _dll_dir.is_dir():
+            _dll_directories.append(os.add_dll_directory(str(_dll_dir)))
 _share_dir = _package_dir / "share"
 
 # Skip auto-detection if user has already set either environment variable

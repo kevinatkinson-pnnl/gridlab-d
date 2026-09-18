@@ -230,55 +230,51 @@ class IsolatedGridLabD:
             exit_code = self._process.poll()
             raise RuntimeError(f"Failed to send {command.name} to worker (exit code: {exit_code}): {e}")
         
-        response_line = self._process.stdout.readline()
-        if not response_line:
-            # Check if worker died
-            exit_code = self._process.poll()
-            if command in (Command.EXIT_GLD, Command.FINALIZE):
-                # EXIT_GLD may close stdout before replying; treat as success and
-                # ensure the worker is terminated.
-                if exit_code is None:
-                    try:
-                        self._process.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
+        non_protocol_lines: list[str] = []
+        while True:
+            response_line = self._process.stdout.readline()
+            if not response_line:
+                # Check if worker died
+                exit_code = self._process.poll()
+                if command in (Command.EXIT_GLD, Command.FINALIZE):
+                    # EXIT_GLD may close stdout before replying; treat as success and
+                    # ensure the worker is terminated.
+                    if exit_code is None:
                         try:
-                            self._process.kill()
-                            self._process.wait(timeout=3)
-                        except Exception:
-                            pass
-                self._process = None
-                return Response(success=True, result=0)
-            if exit_code is not None:
-                raise RuntimeError(
-                    f"Worker process exited unexpectedly with code {exit_code} while processing {command.name}")
-            raise RuntimeError(f"Worker process closed stdout while processing {command.name}")
-        
-        response_line = response_line.strip()
-        if not response_line:
-            # Empty line - check if worker is still alive
-            exit_code = self._process.poll()
-            if exit_code is not None:
-                raise RuntimeError(f"Worker process died (exit code {exit_code}) while processing {command.name}")
-            # Worker is alive but sent empty line - this means stdout is corrupted
-            # Read a few more lines to see what's interfering
-            extra_lines = []
-            for _ in range(5):
-                try:
-                    line = self._process.stdout.readline()
-                    if line:
-                        extra_lines.append(line.strip())
-                except:
-                    break
-            raise RuntimeError(f"Worker sent empty response for {command.name}. Next lines from stdout: {extra_lines}")
-        
-        try:
-            return Response.from_json(response_line)
-        except Exception as e:
-            # Check if worker died during JSON parse
-            exit_code = self._process.poll()
-            if exit_code is not None:
-                raise RuntimeError(f"Worker process crashed (exit code {exit_code}) while processing {command.name}. Last output: {response_line[:100]}")
-            raise RuntimeError(f"Invalid JSON response from worker for {command.name}: {e}. Response: {response_line[:100]}")
+                            self._process.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            try:
+                                self._process.kill()
+                                self._process.wait(timeout=3)
+                            except Exception:
+                                pass
+                    self._process = None
+                    return Response(success=True, result=0)
+
+                details = ""
+                if non_protocol_lines:
+                    details = f" Last worker output: {non_protocol_lines[-1][:200]}"
+                if exit_code is not None:
+                    raise RuntimeError(
+                        f"Worker process exited unexpectedly with code {exit_code} while processing {command.name}.{details}")
+                raise RuntimeError(f"Worker process closed stdout while processing {command.name}.{details}")
+
+            response_line = response_line.strip()
+            if not response_line:
+                continue
+
+            try:
+                return Response.from_json(response_line)
+            except Exception:
+                # GridLAB-D may still emit console output; ignore non-JSON lines
+                # and keep reading until a protocol response is found.
+                non_protocol_lines.append(response_line)
+                if self._verbose:
+                    print(
+                        f"Worker non-protocol stdout during {command.name}: {response_line}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
 
     @classmethod
     def _shutdown_all(cls):
@@ -528,7 +524,24 @@ class IsolatedGridLabD:
         _, before_step_time = self.get_time()
         stop_time = self.get_stoptime()
 
-        response = self._send_command(Command.STEP, {})
+        try:
+            response = self._send_command(Command.STEP, {})
+        except RuntimeError as exc:
+            text = str(exc)
+            if "processing STEP" in text and "Worker process" in text:
+                # If GridLAB-D terminates the worker during stepping, surface this as
+                # a step-level error so callers can handle it in loop control logic.
+                print(
+                    "GridLAB-D error: worker exited during step(); "
+                    "returning TIME_STEP_ERROR and preserving last known time. "
+                    f"Details: {text}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                from .gridlabd_core import GLDErrorCode
+
+                return int(GLDErrorCode.TIME_STEP_ERROR.value), before_step_time
+            raise
         if not response.success:
             raise RuntimeError(response.error)
 
@@ -888,7 +901,7 @@ class IsolatedGridLabD:
             meta["value"] = self._reconstruct_complex(meta["value"])
         return result
     
-    def set_property(self, object_name: str, property_name: str, value) -> int:
+    def set_property(self, object_name: str, property_name: str, value, detailed: bool = False):
         """Set a property value on an object.
         
         Args:
@@ -896,9 +909,11 @@ class IsolatedGridLabD:
             property_name: Name of the property
             value: Value to set - can be str, int, float, bool, or complex
                    Native Python types are automatically converted to GridLAB-D format
+            detailed: When True, return metadata including normalization details
         
         Returns:
-            Error code (0 for success)
+            Error code (0 for success) by default. When detailed=True, returns
+            a dict containing code, normalized, requested_value, and applied_value.
         """
         # Convert Python native types to strings for C++ binding
         if isinstance(value, bool):
@@ -921,10 +936,21 @@ class IsolatedGridLabD:
         response = self._send_command(Command.SET_PROPERTY, {
             "object_name": object_name,
             "property_name": property_name,
-            "value": str_value
+            "value": str_value,
+            "detailed": bool(detailed),
         })
         if not response.success:
             raise RuntimeError(response.error)
+
+        if detailed:
+            if not isinstance(response.result, dict):
+                return {
+                    "code": int(response.result),
+                    "normalized": False,
+                    "requested_value": str_value,
+                    "applied_value": str_value,
+                }
+            return response.result
         return response.result
     
     def get_properties_by_class(self, class_name: str, property_name: str, typed: bool = True) -> dict[str, Any]:

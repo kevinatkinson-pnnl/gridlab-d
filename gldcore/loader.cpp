@@ -1284,7 +1284,7 @@ double loader::loadLatitude(char *buffer)
         }
         return obj->latitude;
     }
-    else if (isnan(v) && (strcmp(buffer, "") != 0 || strcasecmp(buffer, "none") != 0))
+    else if (isnan(v) && (strcmp(buffer, "") != 0 || stricmp_portable(buffer, "none") != 0))
     {
         output_error_raw("loader::loadLatitude() parsing file, %s: %s is not a valid latitude",
                          this->filename.string().c_str(), buffer);
@@ -1311,7 +1311,7 @@ double loader::loadLongitude(char *buffer)
         }
         return obj->longitude;
     }
-    else if (isnan(v) && (strcmp(buffer, "") != 0 || strcasecmp(buffer, "none") != 0))
+    else if (isnan(v) && (strcmp(buffer, "") != 0 || stricmp_portable(buffer, "none") != 0))
     {
         output_error_raw("loader::loadLongitude() parsing file, %s: %s is not a valid longitude",
                          this->filename.string().c_str(), buffer);

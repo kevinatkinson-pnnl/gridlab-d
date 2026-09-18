@@ -33,28 +33,55 @@ find_package(nanobind CONFIG REQUIRED)
 # For PyPI distribution, we expect GridLAB-D to be pre-built
 # The build process should ensure libgldapi.${LIB_EXT} exists before calling this
 
-# Determine paths based on build context
+# Accept an explicit core build directory, including Visual Studio multi-config builds.
 set(GRIDLABD_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
+set(GRIDLABD_BUILD_DIR "" CACHE PATH "Directory containing the pre-built GridLAB-D core")
 set(PYPI_MODE FALSE)
-if(EXISTS "${GRIDLABD_ROOT}/cmake-build/lib/libgldapi.${LIB_EXT}")
-    # Development mode - prefer cmake out-of-source build
-    set(GRIDLABD_BUILD_DIR ${GRIDLABD_ROOT}/cmake-build)
-    set(GRIDLABD_LIB_DIR ${GRIDLABD_BUILD_DIR}/lib)
-    message(STATUS "Development mode: using pre-built GridLAB-D at ${GRIDLABD_BUILD_DIR}")
-elseif(EXISTS "${GRIDLABD_ROOT}/build/lib/libgldapi.${LIB_EXT}")
-    # Legacy in-tree build fallback
-    set(GRIDLABD_BUILD_DIR ${GRIDLABD_ROOT}/build)
-    set(GRIDLABD_LIB_DIR ${GRIDLABD_BUILD_DIR}/lib)
-    message(STATUS "Development mode: using pre-built GridLAB-D at ${GRIDLABD_BUILD_DIR}")
-elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/prebuilt/lib/libgldapi.${LIB_EXT}")
-    # PyPI mode - use prebuilt libraries included in the package
+if(WIN32)
+    set(GRIDLABD_API_NAME "gldapi.dll")
+else()
+    set(GRIDLABD_API_NAME "libgldapi.${LIB_EXT}")
+endif()
+
+if(GRIDLABD_BUILD_DIR)
+    set(_gld_candidates "${GRIDLABD_BUILD_DIR}")
+else()
+    set(_gld_candidates
+        "${GRIDLABD_ROOT}/cmake-build"
+        "${GRIDLABD_ROOT}/build"
+        "${CMAKE_CURRENT_SOURCE_DIR}/prebuilt")
+endif()
+foreach(_gld_build IN LISTS _gld_candidates)
+    foreach(_gld_lib IN ITEMS "lib" "bin/${CMAKE_BUILD_TYPE}" "bin/Release" "bin")
+        if(EXISTS "${_gld_build}/${_gld_lib}/${GRIDLABD_API_NAME}")
+            set(GRIDLABD_BUILD_DIR "${_gld_build}")
+            set(GRIDLABD_LIB_DIR "${_gld_build}/${_gld_lib}")
+            break()
+        endif()
+    endforeach()
+    if(GRIDLABD_LIB_DIR)
+        break()
+    endif()
+endforeach()
+if(NOT GRIDLABD_LIB_DIR)
+    message(FATAL_ERROR "GridLAB-D library not found. Build the core and set GRIDLABD_BUILD_DIR to its build directory.")
+endif()
+if(GRIDLABD_BUILD_DIR STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}/prebuilt")
     set(PYPI_MODE TRUE)
     set(GRIDLABD_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
-    set(GRIDLABD_BUILD_DIR ${GRIDLABD_ROOT})
-    set(GRIDLABD_LIB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/prebuilt/lib)
-    message(STATUS "PyPI mode: using prebuilt GridLAB-D libraries")
+endif()
+set(GRIDLABD_API_LIBRARY "${GRIDLABD_LIB_DIR}/${GRIDLABD_API_NAME}")
+if(WIN32)
+    # MSVC links against the import library, not the runtime DLL.
+    find_library(GRIDLABD_API_IMPORT_LIBRARY NAMES gldapi
+        PATHS "${GRIDLABD_BUILD_DIR}/lib/static/${CMAKE_BUILD_TYPE}"
+              "${GRIDLABD_BUILD_DIR}/lib/static/Release"
+              "${GRIDLABD_BUILD_DIR}/lib/static"
+              "${GRIDLABD_BUILD_DIR}/lib"
+        NO_DEFAULT_PATH REQUIRED)
+    set(GRIDLABD_API_LINK_LIBRARY "${GRIDLABD_API_IMPORT_LIBRARY}")
 else()
-    message(FATAL_ERROR "GridLAB-D library not found. Please build GridLAB-D first or include prebuilt libraries.")
+    set(GRIDLABD_API_LINK_LIBRARY "${GRIDLABD_API_LIBRARY}")
 endif()
 
 # Set include directories based on the build mode
@@ -72,12 +99,12 @@ endif()
 
 # Define HAVE_CONFIG_H like main build does
 add_definitions(-DHAVE_CONFIG_H)
-if(NOT EXISTS ${GRIDLABD_LIB_DIR}/libgldapi.${LIB_EXT})
-    message(FATAL_ERROR "GridLAB-D API library not found at ${GRIDLABD_LIB_DIR}/libgldapi.${LIB_EXT}. Please build GridLAB-D first or ensure prebuilt libraries are included.")
+if(NOT EXISTS ${GRIDLABD_API_LIBRARY})
+    message(FATAL_ERROR "GridLAB-D API library not found at ${GRIDLABD_API_LIBRARY}. Please build GridLAB-D first or ensure prebuilt libraries are included.")
 
 endif()
 
-message(STATUS "Found GridLAB-D API library at ${GRIDLABD_LIB_DIR}/libgldapi.${LIB_EXT}")
+message(STATUS "Found GridLAB-D API library at ${GRIDLABD_API_LIBRARY}")
 
 # Create the Python module
 nanobind_add_module(
@@ -93,12 +120,18 @@ target_include_directories(gridlabd_core PRIVATE
 )
 
 target_compile_definitions(gridlabd_core PRIVATE HAVE_CONFIG_H)
+if(DEFINED SKBUILD_PROJECT_VERSION)
+    target_compile_definitions(gridlabd_core PRIVATE VERSION_INFO=${SKBUILD_PROJECT_VERSION})
+endif()
+if(WIN32)
+    target_compile_definitions(gridlabd_core PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
 
 # Find jsoncpp library (could be in different locations)
 
 # Link against GridLAB-D API library and dependencies
 target_link_libraries(gridlabd_core PRIVATE 
-    ${GRIDLABD_LIB_DIR}/libgldapi.${LIB_EXT}
+    ${GRIDLABD_API_LINK_LIBRARY}
     nlohmann_json::nlohmann_json
 )
 
@@ -115,10 +148,10 @@ set_target_properties(gridlabd_core PROPERTIES
 )
 
 # Install the module
-install(TARGETS gridlabd_core LIBRARY DESTINATION gridlabd)
+install(TARGETS gridlabd_core LIBRARY DESTINATION gridlabd RUNTIME DESTINATION gridlabd)
 
 # Install the GridLAB-D shared library alongside the Python module
-install(FILES ${GRIDLABD_LIB_DIR}/libgldapi.${LIB_EXT}
+install(FILES ${GRIDLABD_API_LIBRARY}
         DESTINATION gridlabd)
 
 # Install essential data files (tzinfo.txt, unitfile.txt) alongside the Python package
@@ -138,6 +171,15 @@ endif()
 
 install(FILES ${GRIDLABD_DATA_FILES}
         DESTINATION gridlabd/share)
+
+if(WIN32)
+    # Bundle runtime dependencies next to the extension for Python's DLL loader.
+    file(GLOB GRIDLABD_RUNTIME_DLLS "${GRIDLABD_LIB_DIR}/*.dll")
+    install(FILES ${GRIDLABD_RUNTIME_DLLS} DESTINATION gridlabd)
+    if(EXISTS "${GRIDLABD_LIB_DIR}/gridlabd.exe")
+        install(PROGRAMS "${GRIDLABD_LIB_DIR}/gridlabd.exe" DESTINATION gridlabd/bin)
+    endif()
+endif()
 
 # Install dummy bin/gridlabd so set_install_root() can work automatically
 # The C++ code expects bin/gridlabd to exist for proper path resolution

@@ -89,7 +89,7 @@ SCHEDULE *find_schedule_robust(const char *name)
 	while ((all_sch = schedule_getnext(all_sch)) != nullptr)
 	{
 		// Try case-insensitive match
-		if (strcasecmp(all_sch->name, name) == 0)
+		if (stricmp_portable(all_sch->name, name) == 0)
 			return all_sch;
 
 		// Try partial match if the name is long enough to be meaningful

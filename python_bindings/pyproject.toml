@@ -58,7 +58,7 @@ test-command = "python -c 'import gridlabd; print(gridlabd.version()); print(gri
 [tool.cibuildwheel.linux]
 archs = ["x86_64"]
 # Install build dependencies
-before-all = "python -m pip install cmake patchelf && cmake -S {project}/.. -B {project}/../build -DCMAKE_BUILD_TYPE=Release && cmake --build {project}/../build --parallel 4"
+before-all = "python -m pip install cmake patchelf && cmake -S {project} -B {project}/build -DCMAKE_BUILD_TYPE=Release && cmake --build {project}/build --parallel 4"
 
 # Build against glibc 2.17; auditwheel verifies the compatibility floor.
 manylinux-x86_64-image = "manylinux2014"
@@ -67,7 +67,7 @@ repair-wheel-command = "auditwheel repair --plat manylinux_2_17_x86_64 --only-pl
 [tool.cibuildwheel.macos]
 archs = ["universal2"]
 # Install CMake on macOS
-before-all = "python -m pip install cmake && cmake -S {project}/.. -B {project}/../build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES='x86_64;arm64' -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 && cmake --build {project}/../build --parallel 4"
+before-all = "python -m pip install cmake && cmake -S {project} -B {project}/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES='x86_64;arm64' -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 && cmake --build {project}/build --parallel 4"
 
 # Target macOS 11.0+ (Big Sur and later)
 environment = { MACOSX_DEPLOYMENT_TARGET = "11.0" }

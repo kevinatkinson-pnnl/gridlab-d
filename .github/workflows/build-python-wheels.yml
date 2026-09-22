@@ -10,6 +10,12 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: Platforms to build
+        type: choice
+        default: all
+        options: [all, unix]
 
 jobs:
   build_wheels:
@@ -18,14 +24,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-24.04
-            platform: linux
-          - os: macos-15
-            platform: macos
-          - os: windows-2022
-            platform: windows
-        
+        include: ${{ fromJSON(inputs.platforms == 'unix' && '[{"os":"ubuntu-24.04","platform":"linux"},{"os":"macos-15","platform":"macos"}]' || '[{"os":"ubuntu-24.04","platform":"linux"},{"os":"macos-15","platform":"macos"},{"os":"windows-2022","platform":"windows"}]') }}
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -77,6 +77,7 @@ jobs:
           path: ./wheelhouse/*.whl
 
   test_windows_abi3:
+    if: inputs.platforms != 'unix'
     name: Test Windows ABI3 on Python ${{ matrix.python }}
     needs: [build_wheels]
     runs-on: windows-2022

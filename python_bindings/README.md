@@ -106,6 +106,13 @@ DLLs with the installed extension.
 
 ## Building Wheels for Manual Distribution
 
+Wheels use nanobind 3 split mode and target the CPython 3.10 stable ABI.
+A Windows x64 build produces a cp310-abi3-win_amd64 wheel for standard
+CPython 3.10 and newer. pip installs the matching nanobind-backend dependency.
+Windows builds require MSVC with the shared Release CRT (/MD). Test the same
+wheel on Python 3.10 through 3.14 before release. Free-threaded Python requires
+a separate build and is not covered by this abi3 wheel.
+
 This preparation step is handled by the GitHub Actions build pipeline. For manual builds:
 
 ### Linux & macOS
@@ -132,12 +139,12 @@ from the repository root:
 python -m pip wheel ./python_bindings --no-deps -w out/wheels --config-settings=cmake.define.GRIDLABD_BUILD_DIR=C:/path/to/gridlab-d/out/build/windows-native
 ```
 
-Test the wheel in a clean virtual environment and from outside the repository,
+Replace <version> below with the built package version. Test the wheel in a clean virtual environment and from outside the repository,
 so the checkout cannot shadow its installed Python files:
 
 ```cmd
 python -m venv out/wheel-test-env
-out\wheel-test-env\Scripts\python -m pip install --no-index --find-links out\wheels gridlabd
+out\wheel-test-env\Scripts\python -m pip install "out\wheels\gridlabd-<version>-cp310-abi3-win_amd64.whl"
 cd %TEMP%
 C:\path\to\gridlab-d\out\wheel-test-env\Scripts\python -c "import gridlabd; print(gridlabd.version()); print(gridlabd.GridLabD().get_clock())"
 ```

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.15)
+cmake_minimum_required(VERSION 3.26)
 project(gridlabd_python_bindings)
 
 # Set C++ standard
@@ -18,7 +18,7 @@ endif()
 set(MODULE_LIB_EXT ${LIB_EXT})
 
 # Find required packages
-find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
+find_package(Python 3.10 COMPONENTS Interpreter Development.Module Development.SABIModule REQUIRED)
 
 # Find or fetch nlohmann/json
 find_package(nlohmann_json 3.12.0 QUIET)
@@ -28,7 +28,7 @@ if(NOT nlohmann_json_FOUND)
     FetchContent_Declare(json URL https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz)
     FetchContent_MakeAvailable(json)
 endif()
-find_package(nanobind CONFIG REQUIRED)
+find_package(nanobind 3.0 CONFIG REQUIRED)
 
 # For PyPI distribution, we expect GridLAB-D to be pre-built
 # The build process should ensure libgldapi.${LIB_EXT} exists before calling this
@@ -127,6 +127,7 @@ message(STATUS "Found GridLAB-D API library at ${GRIDLABD_API_LIBRARY}")
 nanobind_add_module(
     gridlabd_core
     src_cpp/gld_nanobind.cpp
+    BACKEND_MODULE nanobind_backend
 )
 
 # Add include directories

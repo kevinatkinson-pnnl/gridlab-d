@@ -21,7 +21,7 @@ jobs:
         include:
           - os: ubuntu-24.04
             platform: linux
-          - os: macos-14
+          - os: macos-15
             platform: macos
           - os: windows-2022
             platform: windows
@@ -58,7 +58,6 @@ jobs:
         run: python -m cibuildwheel python_bindings --output-dir wheelhouse
         env:
           CIBW_SKIP: "*-manylinux_i686 *-musllinux_* *-win32"
-          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
           CIBW_TEST_COMMAND: python -c "import gridlabd; print(gridlabd.version()); print(gridlabd.hello()); g = gridlabd.GridLabD(); print(g.get_clock())"
           CIBW_TEST_REQUIRES: numpy
 
@@ -77,9 +76,37 @@ jobs:
           name: wheels-${{ matrix.platform }}
           path: ./wheelhouse/*.whl
 
+  test_windows_abi3:
+    name: Test Windows ABI3 on Python ${{ matrix.python }}
+    needs: [build_wheels]
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.11', '3.12', '3.13', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels-windows
+          path: wheelhouse
+      - name: Install and test the same stable-ABI wheel
+        shell: pwsh
+        run: |
+          $wheels = @(Get-ChildItem wheelhouse/*-cp310-abi3-win_amd64.whl)
+          if ($wheels.Count -ne 1) { throw "Expected exactly one Windows ABI3 wheel" }
+          python -m pip install $wheels[0].FullName pytest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item python_bindings/tests "$env:RUNNER_TEMP/abi3-tests" -Recurse
+          Set-Location $env:RUNNER_TEMP
+          python -m pytest abi3-tests/test_simple_load.py abi3-tests/unit/test_initialization.py abi3-tests/test_clock_api.py -q -p no:cacheprovider
+
   upload_test_pypi:
     name: Upload to Test PyPI
-    needs: [build_wheels]
+    needs: [build_wheels, test_windows_abi3]
     runs-on: ubuntu-latest
     environment: testpypi
     permissions:
@@ -101,7 +128,7 @@ jobs:
 
   upload_pypi:
     name: Upload to PyPI
-    needs: [build_wheels]
+    needs: [build_wheels, test_windows_abi3]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

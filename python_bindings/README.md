@@ -106,9 +106,24 @@ DLLs with the installed extension.
 
 ## Building Wheels for Manual Distribution
 
+Wheels use nanobind 3 split mode and target the CPython 3.10 stable ABI.
+A Windows x64 build produces a cp310-abi3-win_amd64 wheel for standard
+CPython 3.10 and newer. pip installs the matching nanobind-backend dependency.
+Windows builds require MSVC with the shared Release CRT (/MD). Test the same
+wheel on Python 3.10 through 3.14 before release. Free-threaded Python requires
+a separate build and is not covered by this abi3 wheel.
+
 This preparation step is handled by the GitHub Actions build pipeline. For manual builds:
 
 ### Linux & macOS
+
+The Linux x86_64 wheel is built in manylinux2014 (glibc 2.17), then checked and
+repaired by auditwheel. The macOS wheel targets 11.0 and is universal2: both the
+extension and the bundled GridLAB-D libraries contain x86_64 and arm64 slices.
+Use `python -m cibuildwheel python_bindings --output-dir wheelhouse` from the
+repository root on Linux (with Docker) or macOS. The platform settings are in
+`pyproject.toml`; changing the filename alone does not change compatibility.
+
 
 1. **Run the preparation script** (copies built libraries into the package):
    ```bash
@@ -132,12 +147,12 @@ from the repository root:
 python -m pip wheel ./python_bindings --no-deps -w out/wheels --config-settings=cmake.define.GRIDLABD_BUILD_DIR=C:/path/to/gridlab-d/out/build/windows-native
 ```
 
-Test the wheel in a clean virtual environment and from outside the repository,
+Replace <version> below with the built package version. Test the wheel in a clean virtual environment and from outside the repository,
 so the checkout cannot shadow its installed Python files:
 
 ```cmd
 python -m venv out/wheel-test-env
-out\wheel-test-env\Scripts\python -m pip install --no-index --find-links out\wheels gridlabd
+out\wheel-test-env\Scripts\python -m pip install "out\wheels\gridlabd-<version>-cp310-abi3-win_amd64.whl"
 cd %TEMP%
 C:\path\to\gridlab-d\out\wheel-test-env\Scripts\python -c "import gridlabd; print(gridlabd.version()); print(gridlabd.GridLabD().get_clock())"
 ```

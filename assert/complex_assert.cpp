@@ -20,11 +20,11 @@ EXPORT_INIT(complex_assert);
 EXPORT_COMMIT(complex_assert);
 
 CLASS *complex_assert::oclass = nullptr;
-static complex_assert defaults_storage; // POD storage for defaults
-complex_assert *complex_assert::defaults = &defaults_storage;
+complex_assert *complex_assert::defaults = nullptr;
 
 complex_assert::complex_assert(MODULE *module)
 {
+    defaults = this;
     if (oclass == nullptr)
     {
         // register to receive notice for first top down. bottom up, and second top
@@ -59,18 +59,17 @@ complex_assert::complex_assert(MODULE *module)
                                 nullptr) < 1)
         {
             char msg[256];
-            sprintf(msg, "unable to publish properties in %s", __FILE__);
+      snprintf(msg, sizeof(msg), "unable to publish properties in %s", __FILE__);
             throw msg;
         }
 
-        // status = ASSERT_TRUE;
-        // within = 0.0;
-        // value = 0.0;
-        // once = ONCE_FALSE;
-        // once_value = 0;
-        // operation = FULL;
-
-        // memcpy(this, defaults, sizeof(complex_assert));
+        status = ASSERT_TRUE;
+        within = 0.0;
+        value = 0.0;
+        once = ONCE_FALSE;
+        once_value = 0;
+        operation = FULL;
+        strcpy(target, "");
     }
 }
 
@@ -305,7 +304,7 @@ EXPORT SIMULATIONMODE update_complex_assert(OBJECT *obj, TIMESTAMP t0,
     char dateformat[16] = "";
     char error_output_buff[2048];
     char datebuff[128];
-    /*complex_assert *da = OBJECTDATA(obj,complex_assert);*/
+
     complex_assert *da = object_data<complex_assert>(obj);
 
     DATETIME delta_dt_val;
@@ -393,28 +392,28 @@ EXPORT SIMULATIONMODE update_complex_assert(OBJECT *obj, TIMESTAMP t0,
 
                         // Output date appropriately
                         if (strcmp(dateformat, "ISO") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%04d-%02d-%02d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.year, delta_dt_val.month, delta_dt_val.day,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else if (strcmp(dateformat, "US") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%02d-%02d-%04d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.month, delta_dt_val.day, delta_dt_val.year,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else if (strcmp(dateformat, "EURO") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%02d-%02d-%04d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.day, delta_dt_val.month, delta_dt_val.year,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else
-                            sprintf(datebuff, "ERROR    %.09f : ", del_clock);
+              snprintf(datebuff, sizeof(datebuff), "ERROR    %.09f : ", del_clock);
 
                         // Actual error part
-                        sprintf(error_output_buff,
+            snprintf(error_output_buff, sizeof(error_output_buff),
                                 "Assert failed on %s - real part of %s (%g) not within %f "
                                 "of given value %g",
                                 gl_name(obj->parent, buff, 64), da->get_target().c_str(),
@@ -451,28 +450,28 @@ EXPORT SIMULATIONMODE update_complex_assert(OBJECT *obj, TIMESTAMP t0,
 
                         // Output date appropriately
                         if (strcmp(dateformat, "ISO") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%04d-%02d-%02d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.year, delta_dt_val.month, delta_dt_val.day,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else if (strcmp(dateformat, "US") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%02d-%02d-%04d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.month, delta_dt_val.day, delta_dt_val.year,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else if (strcmp(dateformat, "EURO") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%02d-%02d-%04d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.day, delta_dt_val.month, delta_dt_val.year,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else
-                            sprintf(datebuff, "ERROR    %.09f : ", del_clock);
+              snprintf(datebuff, sizeof(datebuff), "ERROR    %.09f : ", del_clock);
 
                         // Actual error part
-                        sprintf(error_output_buff,
+            snprintf(error_output_buff, sizeof(error_output_buff),
                                 "Assert failed on %s - imaginary part of %s (%g) not "
                                 "within %f of given value %g",
                                 gl_name(obj->parent, buff, 64), da->get_target().c_str(),
@@ -512,28 +511,28 @@ EXPORT SIMULATIONMODE update_complex_assert(OBJECT *obj, TIMESTAMP t0,
 
                         // Output date appropriately
                         if (strcmp(dateformat, "ISO") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%04d-%02d-%02d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.year, delta_dt_val.month, delta_dt_val.day,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else if (strcmp(dateformat, "US") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%02d-%02d-%04d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.month, delta_dt_val.day, delta_dt_val.year,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else if (strcmp(dateformat, "EURO") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%02d-%02d-%04d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.day, delta_dt_val.month, delta_dt_val.year,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else
-                            sprintf(datebuff, "ERROR    %.09f : ", del_clock);
+              snprintf(datebuff, sizeof(datebuff), "ERROR    %.09f : ", del_clock);
 
                         // Actual error part
-                        sprintf(error_output_buff,
+            snprintf(error_output_buff, sizeof(error_output_buff),
                                 "Assert failed on %s - Magnitude of %s (%g) not within %f "
                                 "of given value %g",
                                 gl_name(obj->parent, buff, 64), da->get_target().c_str(),
@@ -572,28 +571,28 @@ EXPORT SIMULATIONMODE update_complex_assert(OBJECT *obj, TIMESTAMP t0,
 
                         // Output date appropriately
                         if (strcmp(dateformat, "ISO") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%04d-%02d-%02d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.year, delta_dt_val.month, delta_dt_val.day,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else if (strcmp(dateformat, "US") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%02d-%02d-%04d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.month, delta_dt_val.day, delta_dt_val.year,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else if (strcmp(dateformat, "EURO") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%02d-%02d-%04d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.day, delta_dt_val.month, delta_dt_val.year,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else
-                            sprintf(datebuff, "ERROR    %.09f : ", del_clock);
+              snprintf(datebuff, sizeof(datebuff), "ERROR    %.09f : ", del_clock);
 
                         // Actual error part
-                        sprintf(error_output_buff,
+            snprintf(error_output_buff, sizeof(error_output_buff),
                                 "Assert failed on %s - Angle of %s (%g) not within %f of "
                                 "given value %g",
                                 gl_name(obj->parent, buff, 64), da->get_target().c_str(),
@@ -643,28 +642,28 @@ EXPORT SIMULATIONMODE update_complex_assert(OBJECT *obj, TIMESTAMP t0,
 
                         // Output date appropriately
                         if (strcmp(dateformat, "ISO") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%04d-%02d-%02d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.year, delta_dt_val.month, delta_dt_val.day,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else if (strcmp(dateformat, "US") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%02d-%02d-%04d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.month, delta_dt_val.day, delta_dt_val.year,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else if (strcmp(dateformat, "EURO") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%02d-%02d-%04d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.day, delta_dt_val.month, delta_dt_val.year,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else
-                            sprintf(datebuff, "ERROR    %.09f : ", del_clock);
+              snprintf(datebuff, sizeof(datebuff), "ERROR    %.09f : ", del_clock);
 
                         // Actual error part
-                        sprintf(error_output_buff,
+            snprintf(error_output_buff, sizeof(error_output_buff),
                                 "Assert failed on %s - real part of %s (%g) not within %f "
                                 "of given value %g",
                                 gl_name(obj->parent, buff, 64), da->get_target().c_str(),
@@ -701,28 +700,28 @@ EXPORT SIMULATIONMODE update_complex_assert(OBJECT *obj, TIMESTAMP t0,
 
                         // Output date appropriately
                         if (strcmp(dateformat, "ISO") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%04d-%02d-%02d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.year, delta_dt_val.month, delta_dt_val.day,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else if (strcmp(dateformat, "US") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%02d-%02d-%04d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.month, delta_dt_val.day, delta_dt_val.year,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else if (strcmp(dateformat, "EURO") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%02d-%02d-%04d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.day, delta_dt_val.month, delta_dt_val.year,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else
-                            sprintf(datebuff, "ERROR    %.09f : ", del_clock);
+              snprintf(datebuff, sizeof(datebuff), "ERROR    %.09f : ", del_clock);
 
                         // Actual error part
-                        sprintf(error_output_buff,
+            snprintf(error_output_buff, sizeof(error_output_buff),
                                 "Assert failed on %s - imaginary part of %s (%g) not "
                                 "within %f of given value %g",
                                 gl_name(obj->parent, buff, 64), da->get_target().c_str(),
@@ -762,28 +761,28 @@ EXPORT SIMULATIONMODE update_complex_assert(OBJECT *obj, TIMESTAMP t0,
 
                         // Output date appropriately
                         if (strcmp(dateformat, "ISO") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%04d-%02d-%02d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.year, delta_dt_val.month, delta_dt_val.day,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else if (strcmp(dateformat, "US") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%02d-%02d-%04d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.month, delta_dt_val.day, delta_dt_val.year,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else if (strcmp(dateformat, "EURO") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%02d-%02d-%04d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.day, delta_dt_val.month, delta_dt_val.year,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else
-                            sprintf(datebuff, "ERROR    %.09f : ", del_clock);
+              snprintf(datebuff, sizeof(datebuff), "ERROR    %.09f : ", del_clock);
 
                         // Actual error part
-                        sprintf(error_output_buff,
+            snprintf(error_output_buff, sizeof(error_output_buff),
                                 "Assert failed on %s - Magnitude of %s (%g) not within %f "
                                 "of given value %g",
                                 gl_name(obj->parent, buff, 64), da->get_target().c_str(),
@@ -822,28 +821,28 @@ EXPORT SIMULATIONMODE update_complex_assert(OBJECT *obj, TIMESTAMP t0,
 
                         // Output date appropriately
                         if (strcmp(dateformat, "ISO") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%04d-%02d-%02d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.year, delta_dt_val.month, delta_dt_val.day,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else if (strcmp(dateformat, "US") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%02d-%02d-%04d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.month, delta_dt_val.day, delta_dt_val.year,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else if (strcmp(dateformat, "EURO") == 0)
-                            sprintf(datebuff,
+              snprintf(datebuff, sizeof(datebuff),
                                     "ERROR    [%02d-%02d-%04d %02d:%02d:%02d.%.06d %s] : ",
                                     delta_dt_val.day, delta_dt_val.month, delta_dt_val.year,
                                     delta_dt_val.hour, delta_dt_val.minute,
                                     delta_dt_val.second, del_microseconds, delta_dt_val.tz);
                         else
-                            sprintf(datebuff, "ERROR    %.09f : ", del_clock);
+              snprintf(datebuff, sizeof(datebuff), "ERROR    %.09f : ", del_clock);
 
                         // Actual error part
-                        sprintf(error_output_buff,
+            snprintf(error_output_buff, sizeof(error_output_buff),
                                 "Assert failed on %s - Angle of %s (%g) not within %f of "
                                 "given value %g",
                                 gl_name(obj->parent, buff, 64), da->get_target().c_str(),

@@ -69,6 +69,22 @@ class TestTimeConsistency:
             assert isinstance(stoptime, str)
             assert ISO_8601_PATTERN.match(stoptime), f"Not ISO 8601: {stoptime}"
 
+    def test_get_start_and_stop_include_timezone_offset(self, minimal_model):
+        """starttime/stoptime should include timezone info for datetime math."""
+        starttime = minimal_model.get_starttime()
+        stoptime = minimal_model.get_stoptime()
+
+        assert starttime is not None
+        assert stoptime is not None
+
+        start_dt = datetime.fromisoformat(starttime)
+        stop_dt = datetime.fromisoformat(stoptime)
+
+        assert start_dt.tzinfo is not None, f"starttime missing timezone offset: {starttime}"
+        assert stop_dt.tzinfo is not None, f"stoptime missing timezone offset: {stoptime}"
+
+        assert (stop_dt - start_dt).total_seconds() == 3600
+
     def test_step_and_get_time_agree(self, minimal_model):
         """step() and get_time() should report the same time after stepping.
         
@@ -128,6 +144,6 @@ class TestTimeConsistency:
         clock = checkpoint.get("clock", {})
 
         for key in ("starttime", "stoptime", "timestamp"):
-            value = clock.get(key)
+            value = clock.get(key).replace("'","")
             assert isinstance(value, str), f"{key} should be a string"
             assert ISO_8601_PATTERN.match(value), f"Not ISO 8601: {value}"

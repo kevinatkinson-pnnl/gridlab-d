@@ -84,6 +84,12 @@
  @{
  **/
 
+
+#ifdef _WIN32
+    #include <windows.h>
+#endif
+
+
 #include <algorithm> // Add this include for std::ranges
 #include <cctype>
 #include <csignal>
@@ -279,7 +285,7 @@ int exec_init()
 #if 0 /* isn't cooperating for strange reasons -mh */
 #ifdef _WIN32
 	glpathlen=strlen("GLPATH=");
-	sprintf(glpathvar, "GLPATH=");
+	snprintf(glpathvar, sizeof(glpathvar), "GLPATH=");
 	ExpandEnvironmentStrings(getenv("GLPATH"), glpathvar+glpathlen, (DWORD)(1024-glpathlen));
 #endif
 #endif
@@ -457,7 +463,7 @@ nlohmann::ordered_json do_checkpoint(const char *output_filename)
                 {
                     *last_dot = '\0';
                 }
-                sprintf(json_fn, "%s_%s", modelname_noext, "checkpoint.json");
+                snprintf(json_fn, sizeof(json_fn), "%s_%s", modelname_noext, "checkpoint.json");
             }
 
             // ── Resolve output directory (only when filename was auto-generated) ──
@@ -821,11 +827,19 @@ nlohmann::ordered_json do_checkpoint(const char *output_filename)
                                     std::string realPartStr = "";
                                     std::string imagPartStr = "";
                                     if (std::isnan(realPart) || std::fpclassify(realPart) != FP_SUBNORMAL)
-                                        realPartStr = std::format("{:+}", realPart);
+                                    {
+                                        char value[32];
+                                        snprintf(value, sizeof(value), "%+.17g", realPart);
+                                        realPartStr = value;
+                                    }
                                     else if (std::fpclassify(realPart) == FP_SUBNORMAL)
                                         realPartStr = "+0.0";
                                     if (std::isnan(imagPart) || std::fpclassify(imagPart) != FP_SUBNORMAL)
-                                        imagPartStr = std::format("{:+}j", imagPart);
+                                    {
+                                        char value[32];
+                                        snprintf(value, sizeof(value), "%+.17gj", imagPart);
+                                        imagPartStr = value;
+                                    }
                                     else if (std::fpclassify(imagPart) == FP_SUBNORMAL)
                                         imagPartStr = "+0.0j";
                                     std::string complexStr = realPartStr + imagPartStr;
@@ -1334,9 +1348,7 @@ static void tp_do_object_sync(OBJECT *obj)
         /* if this event precedes next step, next step is now this event */
         if (data->step_to > this_t)
         {
-            // LOCK(data);
             data->step_to = this_t;
-            // UNLOCK(data);
         }
         // printf("data->step_to=%d, this_t=%d\n", data->step_to, this_t);
     }
@@ -1424,9 +1436,9 @@ static void ss_do_object_sync(int thread, void *item)
                 convert_from_timestamp(this_t < 0 ? -this_t : this_t, syncdate,
                                        sizeof(syncdate));
                 if (obj->name == nullptr)
-                    sprintf(objname, "%s:%d", obj->oclass->name, obj->id);
+                    snprintf(objname, sizeof(objname), "%s:%d", obj->oclass->name, obj->id);
                 else
-                    strcpy(objname, obj->name);
+                    snprintf(objname, sizeof(objname), "%s", obj->name);
                 fprintf(fp, "%s,%s,%d,%d,%s,%s\n", lastdate, passname.c_str(),
                         global_iteration_limit - iteration_counter, thread, objname,
                         syncdate);
@@ -1487,9 +1499,7 @@ static void ss_do_object_sync(int thread, void *item)
         /* if this event precedes next step, next step is now this event */
         if (data->step_to > this_t)
         {
-            // LOCK(data);
             data->step_to = this_t;
-            // UNLOCK(data);
         }
         // printf("data->step_to=%d, this_t=%d\n", data->step_to, this_t);
     }
@@ -1981,7 +1991,7 @@ static int commit_init()
 /* single / multiple threaded version of commit_all */
 static TIMESTAMP commit_all(TIMESTAMP t0, TIMESTAMP t2)
 {
-    std::atomic_long result{static_cast<long>(TS_NEVER)};
+    std::atomic_llong result{TS_NEVER};
     SIMPLELINKLIST *item;
     unsigned int pc;
     static int n_commits = -1;
@@ -3173,7 +3183,8 @@ static bool execute_single_simulation_iteration(int64 &passes, int64 &tsteps,
 
     /* Update the "double-precision" clock (usually for deltamode) for consistency
      */
-    global_delta_curr_clock = (double)global_clock;
+  global_delta_curr_clock =
+      (double)global_clock + ((double)global_api_clock_nanoseconds / 1e9);
 
     /* determine whether any modules seek delta mode */
     DELTAMODEFLAGS flags = DMF_NONE;
@@ -3212,6 +3223,14 @@ static bool execute_single_simulation_iteration(int64 &passes, int64 &tsteps,
             }
         }
         break;
+    }
+    if (global_api_force_deltamode_once && global_simulation_mode == SM_EVENT &&
+        global_run_realtime == 0)
+    {
+        output_verbose("API requested one-shot deltamode entry");
+        global_simulation_mode = SM_DELTA;
+        t = global_clock;
+        global_api_force_deltamode_once = false;
     }
     if (global_simulation_mode == SM_ERROR)
     {
@@ -3459,6 +3478,7 @@ static bool execute_single_simulation_iteration(int64 &passes, int64 &tsteps,
     if (global_simulation_mode == SM_DELTA &&
         exec_sync_get(sync_data_nullptr) >= global_clock)
     {
+        global_api_delta_trigger_count++;
         if (handle_delta_mode_operation() == -1)
         {
             return false; // DELTA MODE FAILURE

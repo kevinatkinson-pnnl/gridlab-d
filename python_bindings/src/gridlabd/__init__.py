@@ -18,11 +18,20 @@ Example usage:
 
 import os
 from pathlib import Path
+from importlib.util import find_spec
 
 # Set up GRIDLABD_HOME/GRIDLABD_ROOT to point to data files
 # Priority: 1) GRIDLABD_HOME (user custom), 2) GRIDLABD_ROOT (backward compat), 
 #           3) Package share/ dir, 4) Development source tree
-_package_dir = Path(__file__).parent
+# Editable installs keep Python sources and installed native assets in different directories.
+_extension_spec = find_spec(__name__ + ".gridlabd_core")
+_package_dir = (Path(_extension_spec.origin).parent
+                if _extension_spec and _extension_spec.origin else Path(__file__).parent)
+_dll_directories = []
+if os.name == "nt":
+    for _dll_dir in (_package_dir, _package_dir / "lib"):
+        if _dll_dir.is_dir():
+            _dll_directories.append(os.add_dll_directory(str(_dll_dir)))
 _share_dir = _package_dir / "share"
 
 # Skip auto-detection if user has already set either environment variable
@@ -67,6 +76,20 @@ if "GRIDLABD_HOME" not in os.environ and "GRIDLABD_ROOT" not in os.environ:
         # Use appropriate path separator for the platform
         path_sep = ";" if os.name == "nt" else ":"
         os.environ["GLPATH"] = path_sep.join(glpath_components)
+
+# Native modules bundled with the extension must take precedence over modules
+# from an external/source-tree install root.  Mixing those binaries can abort
+# the isolated worker during INIT before it can return a protocol response.
+_bundled_search_paths = [
+    str(path) for path in (_share_dir, _package_dir / "lib") if path.is_dir()
+]
+if _bundled_search_paths:
+    _existing_glpath = os.environ.get("GLPATH", "").split(os.pathsep)
+    _glpath = _bundled_search_paths + [
+        path for path in _existing_glpath
+        if path and path not in _bundled_search_paths
+    ]
+    os.environ["GLPATH"] = os.pathsep.join(_glpath)
 
 # Import low-level C++ API
 from .gridlabd_core import (

@@ -166,19 +166,38 @@ object house {
 
     def test_clock_after_run(self, gld_with_model):
         """Test that clock advances after running simulation."""
-        # Get initial clock
+        import subprocess
+
         initial_clock = gld_with_model.get_clock()
-        print(f"Initial clock: {initial_clock}")
-        
-        # Run simulation
-        code = gld_with_model.run()
+        print(f"Initial clock: {initial_clock}", flush=True)
+
+        try:
+            code = gld_with_model.run()
+        except Exception:
+            # Diagnostic only: inspect the worker before fixture cleanup.
+            process = gld_with_model._process
+            if process is None:
+                print("WORKER: no process reference", flush=True)
+            else:
+                try:
+                    worker_code = process.wait(timeout=3)
+                    print(
+                        f"WORKER EXIT: {worker_code} "
+                        f"(0x{worker_code & 0xFFFFFFFF:08X})",
+                        flush=True,
+                    )
+                except subprocess.TimeoutExpired:
+                    print(
+                        "WORKER STILL RUNNING after run() failed",
+                        flush=True,
+                    )
+            raise  # Preserve the original exception and traceback.
+
         assert code == 0, f"Simulation failed with code {code}"
-        
-        # Get clock after run - might have advanced
+
         final_clock = gld_with_model.get_clock()
-        print(f"Final clock: {final_clock}")
-        
-        # Both should be valid
+        print(f"Final clock: {final_clock}", flush=True)
+
         assert initial_clock is not None
         assert final_clock is not None
 

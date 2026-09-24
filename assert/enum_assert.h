@@ -87,16 +87,10 @@ public:
   inline void set_status(char *str) { get_status_property().from_string(str); }
 
 public:
-  enum_assert() {}
-  ~enum_assert() {
-    if (defaults)
-      delete defaults;
-  }
+  enum_assert() = default;
+  ~enum_assert() = default;
 
   static inline enum_assert *get_defaults() {
-    if (!defaults) {
-      defaults = new enum_assert(); // Initialize lazily
-    }
     return defaults;
   }
 

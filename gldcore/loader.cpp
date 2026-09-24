@@ -1,5 +1,9 @@
 #include "loader.h"
+#include <iomanip>
+#include <limits>
+#include <locale>
 #include <regex>
+#include <sstream>
 #include <unordered_set>
 
 unsigned int64 loader::polynomialHasher(string key)
@@ -47,16 +51,17 @@ STATUS loader::convert(ojson value, string &out)
 {
     if (value.is_number_float())
     {
-        char buf[64]{};
         double dblvalue = value.get<double>();
-        to_chars_result res = to_chars(buf, buf + sizeof(buf), dblvalue);
-        if (res.ec == errc::value_too_large)
+        std::ostringstream stream;
+        stream.imbue(std::locale::classic());
+        stream << std::setprecision(std::numeric_limits<double>::max_digits10) << dblvalue;
+        if (!stream)
         {
-            output_error("loader::convert() parsing file, %s: double value too large to convert to string: %f",
+            output_error("loader::convert() parsing file, %s: unable to convert double value to string: %f",
                          this->filename.string().c_str(), dblvalue);
             return FAILED;
         }
-        out = string(buf);
+        out = stream.str();
         return SUCCESS;
     }
     else if (value.is_number_integer())
@@ -253,7 +258,7 @@ bool loader::class_properties(CLASS *oclass, ojson properties, string source_cod
                     }
                     if (sname.length() < 64)
                     {
-                        strcpy(propname, sname.data());
+                        snprintf(propname, sizeof(propname), "%s", sname.data());
                     }
                     else
                     {
@@ -304,7 +309,7 @@ bool loader::class_properties(CLASS *oclass, ojson properties, string source_cod
                 // 		KEYWORD *key;
                 // 		for (key=prop->keywords; key!=nullptr; key=key->next) {
                 // 			char key_defined[64];
-                // 			sprintf(key_defined,"#define %s (0x%x)\n", key->name, key->value);
+				// 			snprintf(key_defined, sizeof(key_defined), "#define %s (0x%x)\n", key->name, key->value);
                 // 			source_code = source_code + key_defined;
                 // 		}
                 // 	}
@@ -1284,7 +1289,7 @@ double loader::loadLatitude(char *buffer)
         }
         return obj->latitude;
     }
-    else if (isnan(v) && (strcmp(buffer, "") != 0 || strcasecmp(buffer, "none") != 0))
+    else if (isnan(v) && (strcmp(buffer, "") != 0 || stricmp_portable(buffer, "none") != 0))
     {
         output_error_raw("loader::loadLatitude() parsing file, %s: %s is not a valid latitude",
                          this->filename.string().c_str(), buffer);
@@ -1311,7 +1316,7 @@ double loader::loadLongitude(char *buffer)
         }
         return obj->longitude;
     }
-    else if (isnan(v) && (strcmp(buffer, "") != 0 || strcasecmp(buffer, "none") != 0))
+    else if (isnan(v) && (strcmp(buffer, "") != 0 || stricmp_portable(buffer, "none") != 0))
     {
         output_error_raw("loader::loadLongitude() parsing file, %s: %s is not a valid longitude",
                          this->filename.string().c_str(), buffer);

@@ -153,9 +153,12 @@ object house {
             
             # Load with workdir set to the temp directory
             # Use just the filename, not the full path
-            result = gld.load_glm("test.glm", workdir=tmpdir)
-            
-            assert result == 0, f"Failed to load with workdir: {result}"
+            try:
+                result = gld.load_glm("test.glm", workdir=tmpdir)
+                assert result == 0, f"Failed to load with workdir: {result}"
+            finally:
+                # Windows cannot remove a live worker's current directory.
+                gld._shutdown_worker()
 
     @pytest.mark.skip(reason="--threadcount option causes GridLAB-D to hang")
     def test_load_glm_with_threads(self, test_glm_file):

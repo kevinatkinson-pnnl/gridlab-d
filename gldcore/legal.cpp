@@ -49,7 +49,7 @@
 #endif
 
 #ifndef R_OK
-#define R_OK 0x02
+#define R_OK 0x04
 #endif
 
 #ifndef F_OK
@@ -97,7 +97,7 @@ STATUS legal_notice(void) {
   int suppress = global_suppress_repeat_messages;
   char path[1024];
   global_suppress_repeat_messages = 0;
-  sprintf(copyright, "GridLAB-D %s", version_copyright());
+  snprintf(copyright, sizeof(copyright), "GridLAB-D %s", version_copyright());
   end = strchr(copyright, '\n');
   while ((end = strchr(copyright, '\n')) != nullptr) {
     *end = ' ';
@@ -235,7 +235,7 @@ void *check_version_proc(void *ptr) {
   }
 
   /* read version data */
-  sprintf(target, "%d.%d:", version_major(), version_minor());
+  snprintf(target, sizeof(target), "%d.%d:", version_major(), version_minor());
   pv = strstr(result->body.data, target);
   if (pv == nullptr) {
     output_warning("check_version: '%s' has no entry for version %d.%d", url,

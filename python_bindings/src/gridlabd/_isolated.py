@@ -33,6 +33,8 @@ _TZ_OFFSETS = {
 
 def _to_iso8601(time_str: str) -> str:
     value = time_str.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        value = value[1:-1].strip()
     if re.match(r"^\d{4}-\d{2}-\d{2}T", value):
         return value
 
@@ -62,13 +64,102 @@ def _normalize_time_input(value: str) -> str:
     if "T" in value:
         try:
             parsed = datetime.fromisoformat(value)
-            return parsed.strftime("%Y-%m-%d %H:%M:%S")
+            # GridLAB-D parsers used by step_to don't support timezone offsets,
+            # so strip tzinfo but preserve fractional seconds.
+            parsed = parsed.replace(tzinfo=None)
+            text = parsed.isoformat(sep=" ", timespec="microseconds")
+            if "." in text:
+                text = text.rstrip("0").rstrip(".")
+            return text
         except ValueError:
             return value.replace("T", " ", 1)
 
     return value
 
 
+def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    """Parse an ISO 8601 datetime string, normalizing timezone-aware values."""
+    if not value or not isinstance(value, str):
+        return None
+
+    text = value.strip()
+    if not text:
+        return None
+
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+    if dt.tzinfo is not None:
+        dt = dt.replace(tzinfo=None)
+    return dt
+
+
+def _parse_iso_datetime_with_tz(value: Optional[str]) -> Optional[datetime]:
+    """Parse an ISO 8601 datetime string and preserve timezone when present."""
+    if not value or not isinstance(value, str):
+        return None
+
+    text = value.strip()
+    if not text:
+        return None
+
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _coerce_run_bound_to_timestamp(
+    value: Optional[float | str],
+    reference_tz,
+) -> Optional[float]:
+    """Convert run() bound inputs (float or ISO string) to numeric timestamps."""
+    if value is None:
+        return None
+
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+
+        dt = _parse_iso_datetime_with_tz(text)
+        if dt is None:
+            raise ValueError(f"Invalid ISO 8601 time value for run bound: {value!r}")
+
+        if dt.tzinfo is None and reference_tz is not None:
+            dt = dt.replace(tzinfo=reference_tz)
+
+        return float(dt.timestamp())
+
+    raise TypeError(
+        f"run bounds must be float, str, or None; got {type(value).__name__}"
+    )
+
+
+def _is_stoptime_blocked_step(
+    before_step_time: Optional[str],
+    after_step_time: Optional[str],
+    stop_time: Optional[str],
+) -> bool:
+    """Return True when step() is a no-op because simulation is already at/after stoptime."""
+    before_dt = _parse_iso_datetime(before_step_time)
+    after_dt = _parse_iso_datetime(after_step_time)
+    stop_dt = _parse_iso_datetime(stop_time)
+    if before_dt is None or after_dt is None or stop_dt is None:
+        return False
+
+    return before_dt >= stop_dt and after_dt == before_dt
 class IsolatedGridLabD:
     """
     GridLabD wrapper that runs in an isolated subprocess.
@@ -104,14 +195,31 @@ class IsolatedGridLabD:
     
     def _spawn_worker(self):
         """Spawn a new worker subprocess and wait for it to be ready."""
+        import os
+        import platform
+        
+        # Prepare environment for worker subprocess
+        env = os.environ.copy()
+        
+        # On Windows, avoid start_new_session which can cause subprocess issues
+        # Use CREATE_NEW_PROCESS_GROUP instead for process isolation
+        kwargs = {
+            'stdin': PIPE,
+            'stdout': PIPE,
+            'stderr': sys.stderr if self._verbose else subprocess.DEVNULL,
+            'text': True,
+            'bufsize': 1,
+            'env': env
+        }
+        
+        if platform.system() == 'Windows':
+            kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            kwargs['start_new_session'] = True
+        
         self._process = subprocess.Popen(
             [sys.executable, "-m", "gridlabd._worker"],
-            stdin=PIPE,
-            stdout=PIPE,
-            stderr=sys.stderr if self._verbose else subprocess.DEVNULL,
-            text=True,
-            bufsize=1,
-            start_new_session=True
+            **kwargs
         )
         
         # Read the READY signal (worker sends it immediately on startup)
@@ -141,55 +249,51 @@ class IsolatedGridLabD:
             exit_code = self._process.poll()
             raise RuntimeError(f"Failed to send {command.name} to worker (exit code: {exit_code}): {e}")
         
-        response_line = self._process.stdout.readline()
-        if not response_line:
-            # Check if worker died
-            exit_code = self._process.poll()
-            if command in (Command.EXIT_GLD, Command.FINALIZE):
-                # EXIT_GLD may close stdout before replying; treat as success and
-                # ensure the worker is terminated.
-                if exit_code is None:
-                    try:
-                        self._process.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
+        non_protocol_lines: list[str] = []
+        while True:
+            response_line = self._process.stdout.readline()
+            if not response_line:
+                # Check if worker died
+                exit_code = self._process.poll()
+                if command in (Command.EXIT_GLD, Command.FINALIZE):
+                    # EXIT_GLD may close stdout before replying; treat as success and
+                    # ensure the worker is terminated.
+                    if exit_code is None:
                         try:
-                            self._process.kill()
-                            self._process.wait(timeout=3)
-                        except Exception:
-                            pass
-                self._process = None
-                return Response(success=True, result=0)
-            if exit_code is not None:
-                raise RuntimeError(
-                    f"Worker process exited unexpectedly with code {exit_code} while processing {command.name}")
-            raise RuntimeError(f"Worker process closed stdout while processing {command.name}")
-        
-        response_line = response_line.strip()
-        if not response_line:
-            # Empty line - check if worker is still alive
-            exit_code = self._process.poll()
-            if exit_code is not None:
-                raise RuntimeError(f"Worker process died (exit code {exit_code}) while processing {command.name}")
-            # Worker is alive but sent empty line - this means stdout is corrupted
-            # Read a few more lines to see what's interfering
-            extra_lines = []
-            for _ in range(5):
-                try:
-                    line = self._process.stdout.readline()
-                    if line:
-                        extra_lines.append(line.strip())
-                except:
-                    break
-            raise RuntimeError(f"Worker sent empty response for {command.name}. Next lines from stdout: {extra_lines}")
-        
-        try:
-            return Response.from_json(response_line)
-        except Exception as e:
-            # Check if worker died during JSON parse
-            exit_code = self._process.poll()
-            if exit_code is not None:
-                raise RuntimeError(f"Worker process crashed (exit code {exit_code}) while processing {command.name}. Last output: {response_line[:100]}")
-            raise RuntimeError(f"Invalid JSON response from worker for {command.name}: {e}. Response: {response_line[:100]}")
+                            self._process.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            try:
+                                self._process.kill()
+                                self._process.wait(timeout=3)
+                            except Exception:
+                                pass
+                    self._process = None
+                    return Response(success=True, result=0)
+
+                details = ""
+                if non_protocol_lines:
+                    details = f" Last worker output: {non_protocol_lines[-1][:200]}"
+                if exit_code is not None:
+                    raise RuntimeError(
+                        f"Worker process exited unexpectedly with code {exit_code} while processing {command.name}.{details}")
+                raise RuntimeError(f"Worker process closed stdout while processing {command.name}.{details}")
+
+            response_line = response_line.strip()
+            if not response_line:
+                continue
+
+            try:
+                return Response.from_json(response_line)
+            except Exception:
+                # GridLAB-D may still emit console output; ignore non-JSON lines
+                # and keep reading until a protocol response is found.
+                non_protocol_lines.append(response_line)
+                if self._verbose:
+                    print(
+                        f"Worker non-protocol stdout during {command.name}: {response_line}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
 
     @classmethod
     def _shutdown_all(cls):
@@ -217,11 +321,11 @@ class IsolatedGridLabD:
     @staticmethod
     def set_install_root(path: str):
         """Set the GridLAB-D installation root directory."""
-        # Set it as environment variable so worker processes can pick it up
-        os.environ["GRIDLABD_ROOT"] = path
-        # Also try to validate it using the C++ class directly
+        # Validate before publishing the path to future workers.
         from .gridlabd_core import GridLabD as CppGridLabD
         CppGridLabD.set_install_root(path)
+        os.environ["GRIDLABD_HOME"] = path
+        os.environ["GRIDLABD_ROOT"] = path
     
     @staticmethod
     def get_install_root() -> str:
@@ -381,13 +485,38 @@ class IsolatedGridLabD:
         return response.result
     
     # Execution methods
-    def run(self, start_time: Optional[float] = None, stop_time: Optional[float] = None) -> int:
-        """Run the simulation optionally bounding time interval."""
+    def run(
+        self,
+        start_time: Optional[float | str] = None,
+        stop_time: Optional[float | str] = None,
+    ) -> int:
+        """Run the simulation, optionally bounding the timestamp interval.
+
+        Args:
+            start_time: Optional bound as either numeric GridLAB-D timestamp
+                or ISO 8601 string.
+            stop_time: Optional bound as either numeric GridLAB-D timestamp
+                or ISO 8601 string.
+
+        Note:
+            The underlying C++ run API accepts numeric timestamps. String
+            inputs are converted to timestamps in the wrapper before dispatch.
+        """
         if self.get_object_count() == 0:
             raise RuntimeError("Cannot run simulation: no objects loaded in model")
+
+        reference_tz = None
+        if isinstance(start_time, str) or isinstance(stop_time, str):
+            _, current_time = self.get_time()
+            current_dt = _parse_iso_datetime_with_tz(current_time)
+            reference_tz = current_dt.tzinfo if current_dt is not None else None
+
+        start_ts = _coerce_run_bound_to_timestamp(start_time, reference_tz)
+        stop_ts = _coerce_run_bound_to_timestamp(stop_time, reference_tz)
+
         response = self._send_command(Command.RUN, {
-            "start_time": start_time,
-            "stop_time": stop_time
+            "start_time": start_ts,
+            "stop_time": stop_ts,
         })
         if not response.success:
             raise RuntimeError(response.error)
@@ -411,11 +540,46 @@ class IsolatedGridLabD:
         if self.get_object_count() == 0:
             raise RuntimeError("Cannot step simulation: no objects loaded in model")
 
-        response = self._send_command(Command.STEP, {})
+        _, before_step_time = self.get_time()
+        stop_time = self.get_stoptime()
+
+        try:
+            response = self._send_command(Command.STEP, {})
+        except RuntimeError as exc:
+            text = str(exc)
+            if "processing STEP" in text and "Worker process" in text:
+                # If GridLAB-D terminates the worker during stepping, surface this as
+                # a step-level error so callers can handle it in loop control logic.
+                print(
+                    "GridLAB-D error: worker exited during step(); "
+                    "returning TIME_STEP_ERROR and preserving last known time. "
+                    f"Details: {text}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                from .gridlabd_core import GLDErrorCode
+
+                return int(GLDErrorCode.TIME_STEP_ERROR.value), before_step_time
+            raise
         if not response.success:
             raise RuntimeError(response.error)
 
-        return response.result["code"], gld_to_iso(response.result["time"])
+        code = response.result["code"]
+        step_time = gld_to_iso(response.result["time"])
+
+        if code == 0 and _is_stoptime_blocked_step(before_step_time, step_time, stop_time):
+            # Emit a default warning even when verbose=False so users can see the stop-time block.
+            print(
+                "GridLAB-D warning: step() was blocked at stoptime; "
+                f"simulation remains at {step_time}.",
+                file=sys.stderr,
+                flush=True,
+            )
+            from .gridlabd_core import GLDErrorCode
+
+            return int(GLDErrorCode.TIME_STEP_ERROR.value), step_time
+
+        return code, step_time
     
     def step_to(self, target_time_str: str) -> tuple[int, Optional[str]]:
         """Step the simulation to a specific timestamp.
@@ -459,6 +623,30 @@ class IsolatedGridLabD:
     def set_time_step(self, time_step: int) -> int:
         """Set the simulation time step."""
         response = self._send_command(Command.SET_TIME_STEP, {"time_step": time_step})
+        if not response.success:
+            raise RuntimeError(response.error)
+        return response.result
+
+    def maintain_transient(self, enable: bool) -> int:
+        """Toggle persistent transient behavior (global deltamode_forced_always)."""
+        response = self._send_command(
+            Command.MAINTAIN_TRANSIENT,
+            {"enable": bool(enable)},
+        )
+        if not response.success:
+            raise RuntimeError(response.error)
+        return response.result
+
+    def trigger_transient(self) -> int:
+        """Trigger one-shot transient behavior for the next step opportunity."""
+        response = self._send_command(Command.TRIGGER_TRANSIENT, {})
+        if not response.success:
+            raise RuntimeError(response.error)
+        return response.result
+
+    def exit_transient(self) -> int:
+        """Force exit transient mode back to QSTS (not recommended)."""
+        response = self._send_command(Command.EXIT_TRANSIENT, {})
         if not response.success:
             raise RuntimeError(response.error)
         return response.result
@@ -534,43 +722,83 @@ class IsolatedGridLabD:
             raise RuntimeError(response.error)
         return response.result
 
-    def get_objects_by_class(self, class_name: str) -> list[str]:
-        """Get all object names of a specific class."""
+    def get_object_names_by_class(self, class_name: str) -> list[str]:
+        """Get all object names/IDs of a specific class."""
         response = self._send_command(Command.GET_OBJECTS_BY_CLASS, {"class_name": class_name})
         if not response.success:
             raise RuntimeError(response.error)
         return response.result
+
+    def get_objects_by_class(self, class_name: str) -> list[str]:
+        """Compatibility alias for get_object_names_by_class()."""
+        return self.get_object_names_by_class(class_name)
     
-    def get_object_properties(self, object_name: str) -> dict[str, str]:
-        """Get all properties of an object as a dictionary."""
-        response = self._send_command(Command.GET_OBJECT_PROPERTIES, {"object_name": object_name})
+    def get_object_properties(self, object_name: str, typed: bool = True) -> dict[str, Any]:
+        """Get all properties of an object as a dictionary.
+
+        Args:
+            object_name: Name or ID of the object.
+            typed: When True, return native Python values with units stripped.
+        """
+        response = self._send_command(
+            Command.GET_OBJECT_PROPERTIES,
+            {"object_name": object_name, "typed": bool(typed)},
+        )
         if not response.success:
             raise RuntimeError(response.error)
+        if typed:
+            return self._reconstruct_complex_deep(response.result)
         return response.result
     
-    def get_all_objects(self, class_name: str) -> list[dict[str, str]]:
-        """Get all objects (and their properties) of a specific class."""
-        response = self._send_command(Command.GET_ALL_OBJECTS, {"class_name": class_name})
+    def get_all_objects(self, class_name: str, typed: bool = True) -> list[dict[str, Any]]:
+        """Get all objects (and their properties) of a specific class.
+
+        Args:
+            class_name: Name of the class.
+            typed: When True, return native Python values with units stripped.
+        """
+        response = self._send_command(
+            Command.GET_ALL_OBJECTS,
+            {"class_name": class_name, "typed": bool(typed)},
+        )
         if not response.success:
             raise RuntimeError(response.error)
+        if typed:
+            return self._reconstruct_complex_deep(response.result)
         return response.result
     
-    def get_model(self) -> dict[str, list[dict[str, str]]]:
-        """Get the entire model with all objects and properties organized by class."""
-        response = self._send_command(Command.GET_MODEL, {})
+    def get_model(self, typed: bool = True) -> dict[str, list[dict[str, Any]]]:
+        """Get the entire model with all objects and properties organized by class.
+
+        Args:
+            typed: When True, return native Python values with units stripped.
+        """
+        response = self._send_command(Command.GET_MODEL, {"typed": bool(typed)})
         if not response.success:
             raise RuntimeError(response.error)
+        if typed:
+            return self._reconstruct_complex_deep(response.result)
         return response.result
     
-    def get_property(self, object_name: str, property_name: str) -> tuple[int, str]:
-        """Get a property value from an object."""
+    def get_property(self, object_name: str, property_name: str, typed: bool = True) -> tuple[int, Any]:
+        """Get a property value from an object.
+
+        Args:
+            object_name: Name or ID of the object.
+            property_name: Name of the property.
+            typed: When True, return native Python value with units stripped.
+        """
         response = self._send_command(Command.GET_PROPERTY, {
             "object_name": object_name,
-            "property_name": property_name
+            "property_name": property_name,
+            "typed": bool(typed),
         })
         if not response.success:
             raise RuntimeError(response.error)
-        return response.result["code"], response.result["value"]
+        value = response.result["value"]
+        if typed:
+            value = self._reconstruct_complex_deep(value)
+        return response.result["code"], value
     
     def get_property_info(self, object_name: str, property_name: str) -> tuple[int, dict]:
         """Get property metadata (type, unit, description, access).
@@ -599,6 +827,16 @@ class IsolatedGridLabD:
         """Reconstruct a complex number from its JSON-safe dict representation."""
         if isinstance(value, dict) and value.get("__complex__"):
             return complex(value["real"], value["imag"])
+        return value
+
+    @classmethod
+    def _reconstruct_complex_deep(cls, value):
+        """Reconstruct complex markers recursively in lists and dictionaries."""
+        value = cls._reconstruct_complex(value)
+        if isinstance(value, list):
+            return [cls._reconstruct_complex_deep(v) for v in value]
+        if isinstance(value, dict):
+            return {k: cls._reconstruct_complex_deep(v) for k, v in value.items()}
         return value
 
     def get_object_property_value(self, object_name: str, property_name: str):
@@ -686,7 +924,7 @@ class IsolatedGridLabD:
             meta["value"] = self._reconstruct_complex(meta["value"])
         return result
     
-    def set_property(self, object_name: str, property_name: str, value) -> int:
+    def set_property(self, object_name: str, property_name: str, value, detailed: bool = False):
         """Set a property value on an object.
         
         Args:
@@ -694,9 +932,11 @@ class IsolatedGridLabD:
             property_name: Name of the property
             value: Value to set - can be str, int, float, bool, or complex
                    Native Python types are automatically converted to GridLAB-D format
+            detailed: When True, return metadata including normalization details
         
         Returns:
-            Error code (0 for success)
+            Error code (0 for success) by default. When detailed=True, returns
+            a dict containing code, normalized, requested_value, and applied_value.
         """
         # Convert Python native types to strings for C++ binding
         if isinstance(value, bool):
@@ -719,20 +959,40 @@ class IsolatedGridLabD:
         response = self._send_command(Command.SET_PROPERTY, {
             "object_name": object_name,
             "property_name": property_name,
-            "value": str_value
+            "value": str_value,
+            "detailed": bool(detailed),
         })
         if not response.success:
             raise RuntimeError(response.error)
+
+        if detailed:
+            if not isinstance(response.result, dict):
+                return {
+                    "code": int(response.result),
+                    "normalized": False,
+                    "requested_value": str_value,
+                    "applied_value": str_value,
+                }
+            return response.result
         return response.result
     
-    def get_properties_by_class(self, class_name: str, property_name: str) -> dict[str, str]:
-        """Get property values from all objects of a class."""
+    def get_properties_by_class(self, class_name: str, property_name: str, typed: bool = True) -> dict[str, Any]:
+        """Get property values from all objects of a class.
+
+        Args:
+            class_name: Name of the class.
+            property_name: Name of the property.
+            typed: When True, return native Python values with units stripped.
+        """
         response = self._send_command(Command.GET_PROPERTIES_BY_CLASS, {
             "class_name": class_name,
-            "property_name": property_name
+            "property_name": property_name,
+            "typed": bool(typed),
         })
         if not response.success:
             raise RuntimeError(response.error)
+        if typed:
+            return self._reconstruct_complex_deep(response.result)
         return response.result
     
     def set_property_by_class(self, class_name: str, property_name: str, value: str) -> int:
@@ -769,7 +1029,7 @@ class IsolatedGridLabD:
             ISO 8601 string in the simulation's local timezone, or None
             if the clock has not been initialized.
         """
-        return gld_to_iso(self.global_getvar("clock"))
+        return gld_to_iso(self.global_getvar("clock"), timezone_hint=self.get_timezone())
 
     def get_starttime(self) -> Optional[str]:
         """Get the simulation start time.
@@ -778,7 +1038,7 @@ class IsolatedGridLabD:
             ISO 8601 string in the simulation's local timezone, or None
             if start time is not set.
         """
-        return gld_to_iso(self.global_getvar("starttime"))
+        return gld_to_iso(self.global_getvar("starttime"), timezone_hint=self.get_timezone())
 
     def get_stoptime(self) -> Optional[str]:
         """Get the simulation stop time.
@@ -787,7 +1047,7 @@ class IsolatedGridLabD:
             ISO 8601 string in the simulation's local timezone, or None
             if stop time is NEVER (unbounded simulation).
         """
-        return gld_to_iso(self.global_getvar("stoptime"))
+        return gld_to_iso(self.global_getvar("stoptime"), timezone_hint=self.get_timezone())
     
     def set_starttime(self, value: str) -> int:
         """Set the simulation start time.

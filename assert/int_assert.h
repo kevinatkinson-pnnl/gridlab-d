@@ -27,17 +27,11 @@ public:
   GL_ATOMIC(int64,within);*/
 
   static inline int_assert *get_defaults() {
-    if (!defaults) {
-      defaults = new int_assert(); // Initialize lazily
-    }
     return defaults;
   }
 
-  int_assert() {}
-  ~int_assert() {
-    if (defaults)
-      delete defaults;
-  }
+  int_assert() = default;
+  ~int_assert() = default;
 
 protected:
   enumeration status;      // Member variable of type `enumeration`.

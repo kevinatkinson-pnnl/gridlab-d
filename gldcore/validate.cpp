@@ -20,7 +20,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <format>
 #include <sys/stat.h>
 #include <chrono>
 #include <thread>
@@ -545,7 +544,7 @@ static const char *GetLastErrorMsg(void)
         *p = ' ';
     while ((p = strchr((char *)lpMsgBuf, '\r')) != nullptr)
         *p = ' ';
-    sprintf(szBuf, "%s (error code %d)", lpMsgBuf, dw);
+    snprintf(szBuf, sizeof(szBuf), "%s (error code %d)", (char *)lpMsgBuf, dw);
 
     LocalFree(lpMsgBuf);
     return szBuf;
@@ -554,7 +553,7 @@ static DIR *opendir(const char *dirname)
 {
     WIN32_FIND_DATA fd;
     char search[MAX_PATH];
-    sprintf(search, "%s/*", dirname);
+    snprintf(search, sizeof(search), "%s/*", dirname);
     HANDLE dh = FindFirstFile(search, &fd);
     if (dh == INVALID_HANDLE_VALUE)
     {
@@ -949,7 +948,7 @@ static bool destroy_dir(char *name)
         if (strcmp(dp->d_name, ".") != 0 && strcmp(dp->d_name, "..") != 0)
         {
             char file[1024];
-            sprintf(file, "%s/%s", name, dp->d_name);
+            snprintf(file, sizeof(file), "%s/%s", name, dp->d_name);
             if (unlink(file) != 0)
             {
                 output_error("destroy_dir(char *name='%s'): unlink('%s') returned '%s'", name, dp->d_name, strerror(errno));
@@ -1038,7 +1037,7 @@ static counters run_test(char *file, double *elapsed_time = nullptr)
     // Define the output capture file path - GridLAB-D writes errors to
     // gridlabd.err when --redirect all is used
     char output_capture_file[1024];
-    sprintf(output_capture_file, "%s/gridlabd.out", dir);
+    snprintf(output_capture_file, sizeof(output_capture_file), "%s/gridlabd.out", dir);
 
     char cwd[1024];
     char_result = getcwd(cwd, sizeof(cwd));
@@ -1069,7 +1068,7 @@ static counters run_test(char *file, double *elapsed_time = nullptr)
         // std::cerr << "Thread " << std::hash<std::thread::id>{}(std::this_thread::get_id()) << "using directory " << dir << std::endl;
     }
     char out[1024];
-    sprintf(out, "%s/%s%s", dir, name, fileExtension.c_str());
+    snprintf(out, sizeof(out), "%s/%s%s", dir, name, fileExtension.c_str());
     if (!copyfile(file, out))
     {
         output_error("run_test(char *file='%s'): unable to copy to test folder %s\n** %s", file, dir);
@@ -1111,21 +1110,13 @@ static counters run_test(char *file, double *elapsed_time = nullptr)
 #endif
 
     // 2. Prepare arguments.
-    // Ensure 'dir', 'validate_cmdargs', and 'name' are compatible with std::format.
-    // If they are char*, std::format will handle them as std::string_view.
-    // If they are std::string, that's fine too.
-
-    // 3. Construct the full command string using std::format.
-    // This is type-safe and handles memory automatically.
-    // We explicitly quote the executable path to handle spaces in paths correctly.
-
-    std::string command_line = std::format(
-        "\"{}\" -W {} {} {}{}",
-        executable_to_run_path.string(), // Get string representation for formatting
-        dir,
-        validate_child_cmdargs,
-        name,
-        fileExtension);
+    // Construct the full command string for diagnostics. The subprocess itself
+    // is launched with an argument vector below, so no shell escaping is needed.
+    std::ostringstream command_line_stream;
+    command_line_stream << '"' << executable_to_run_path.string() << "\" -W "
+                        << dir << ' ' << validate_child_cmdargs << ' '
+                        << name << fileExtension;
+    std::string command_line = command_line_stream.str();
 
     // 4. Execute the command using your custom vsystem wrapper.
     // Assuming vsystem expects a C-style string (const char*).
@@ -1160,7 +1151,7 @@ static counters run_test(char *file, double *elapsed_time = nullptr)
         while (ss >> token)
             test_args.push_back(token);
 
-        test_args.push_back(std::format("{}{}", name, fileExtension));
+        test_args.push_back(std::string(name) + fileExtension);
 
         std::string out_path = std::string(dir) + "/gridlabd.out.pipe";
         std::string err_path = std::string(dir) + "/gridlabd.err.pipe";
@@ -1193,7 +1184,7 @@ static counters run_test(char *file, double *elapsed_time = nullptr)
         }
 
         // Finally, add the model file itself
-        test_args.push_back(std::format("{}{}", name, fileExtension));
+        test_args.push_back(std::string(name) + fileExtension);
 
         std::string full_cmd_for_debug;
         for (const auto &arg : test_args)
@@ -1453,7 +1444,7 @@ static void *(run_test_proc)(int arg) // *arg)
             result_code[item->id].store(code);
 
             char buffer[2048];
-            sprintf(buffer, "%s%s%6.1f%s%s", flags[code], report_col, dt, report_col, item->name);
+            snprintf(buffer, sizeof(buffer), "%s%s%6.1f%s%s", flags[code], report_col, dt, report_col, item->name);
             report_data("%s", buffer);
             report_newrow();
         }
@@ -1468,7 +1459,7 @@ static size_t process_dir(const char *path, bool runglms = false)
 {
     // check for block file
     char blockfile[1024];
-    sprintf(blockfile, "%s/validate.no", path);
+    snprintf(blockfile, sizeof(blockfile), "%s/validate.no", path);
     if (access(blockfile, 00) == 0 && !global_isdefined("force_validate"))
     {
         output_debug("processing directory '%s' blocked by presence of 'validate.no' file", path);
@@ -1491,7 +1482,7 @@ static size_t process_dir(const char *path, bool runglms = false)
     while ((dp = readdir(dirp)) != nullptr)
     {
         char item[1024];
-        size_t len = sprintf(item, "%s/%s", path, dp->d_name);
+        size_t len = snprintf(item, sizeof(item), "%s/%s", path, dp->d_name);
         char *ext = strrchr(item, '.');
         if (dp->d_name[0] == '.')
             continue; // ignore anything that starts with a dot
@@ -1590,12 +1581,12 @@ int validate(int argc, char *argv[])
     {
         // 2. For the 'validate_child_cmdargs' (passed to individual GLM runs)
         // Filter out --threadcount and its value
-        if (strcmp(argv[i], "--threadcount") == 0)
-        {
-            // Skip the current argument (--threadcount) and the next one (its value)
-            i++;      // Increment 'i' to skip the value, so next loop iteration starts after it
-            continue; // Do not add --threadcount or its value to child_cmd_args
-        }
+//        if (strcmp(argv[i], "--threadcount") == 0)
+//        {
+//            // Skip the current argument (--threadcount) and the next one (its value)
+//            i++;      // Increment 'i' to skip the value, so next loop iteration starts after it
+//            continue; // Do not add --threadcount or its value to child_cmd_args
+//        }
         // Filter out --validate, as it's for the harness, not individual GLM runs
         if (strcmp(argv[i], "--validate") == 0)
         {

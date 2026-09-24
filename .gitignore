@@ -156,6 +156,7 @@ python_bindings/env
 docs/
 test/
 env
+.venv*
 
 # IDE-related
 .vs/
@@ -165,3 +166,6 @@ CMakePresets.json
 workdir/
 __pycache__/
 python_bindings/src/gridlabd/__pycache__/__init__.cpython-312.pyc
+
+# Generated Files
+out/

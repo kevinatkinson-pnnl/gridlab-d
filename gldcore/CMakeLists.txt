@@ -192,7 +192,10 @@ set_target_properties(gldapi PROPERTIES
 )
 
 
-target_link_libraries(gldapi PUBLIC nlohmann_json::nlohmann_json)
+target_link_libraries(gldapi
+  PUBLIC nlohmann_json::nlohmann_json
+  PRIVATE ${CMAKE_DL_LIBS}
+)
 
 
 # If Xerces/Curses/etc. are found, link them here (keep existing blocks if you have them)
@@ -246,5 +249,4 @@ list(LENGTH _exe_srcs _exe_count)
 if(_exe_count GREATER 1)
   message(FATAL_ERROR "gridlabd must be a thin host (only main.cpp); core lives in gldapi.")
 endif()
-
 

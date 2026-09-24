@@ -6,6 +6,7 @@ executing them against a real GridLabD C++ instance and returning results.
 """
 
 import sys
+import os
 import json
 from typing import Any
 
@@ -26,6 +27,8 @@ _TZ_OFFSETS = {
 
 def _to_iso8601(time_str: str) -> str:
     value = time_str.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        value = value[1:-1].strip()
     if re.match(r"^\d{4}-\d{2}-\d{2}T", value):
         return value
 
@@ -43,7 +46,14 @@ def _to_iso8601(time_str: str) -> str:
     return iso
 
 # Import the direct C++ binding
-from .gridlabd_core import GridLabD as DirectGridLabD, GLDErrorCode
+try:
+    from .gridlabd_core import GridLabD as DirectGridLabD, GLDErrorCode
+except ImportError as e:
+    import sys
+    sys.stderr.write(f"FATAL: Failed to import gridlabd_core: {e}\n")
+    sys.stderr.write(f"This typically means gldapi.dll or its dependencies are not accessible.\n")
+    sys.stderr.write(f"PATH={os.environ.get('PATH')}\n")
+    sys.exit(1)
 
 
 # Global instance for this worker
@@ -62,10 +72,13 @@ def handle_init(message: Message) -> Response:
     """Initialize a new GridLabD instance."""
     global _gld_instance
     try:
-        # Set install root from environment before creating instance
+        # Set install root from environment before creating instance.
+        # Keep precedence aligned with package init logic:
+        # GRIDLABD_HOME (preferred) > GRIDLABD_ROOT (backward compatibility).
         import os
-        if "GRIDLABD_ROOT" in os.environ:
-            DirectGridLabD.set_install_root(os.environ["GRIDLABD_ROOT"])
+        install_root = os.environ.get("GRIDLABD_HOME") or os.environ.get("GRIDLABD_ROOT")
+        if install_root:
+            DirectGridLabD.set_install_root(install_root)
         
         _gld_instance = DirectGridLabD()
         
@@ -237,6 +250,33 @@ def handle_set_time_step(message: Message) -> Response:
         return Response(success=False, error=str(e))
 
 
+def handle_maintain_transient(message: Message) -> Response:
+    """Toggle persistent transient (deltamode) behavior."""
+    try:
+        code = _gld_instance.maintain_transient(message.args["enable"])
+        return Response(success=True, result=int(code) if isinstance(code, int) else int(code.value))
+    except Exception as e:
+        return Response(success=False, error=str(e))
+
+
+def handle_trigger_transient(message: Message) -> Response:
+    """Trigger one-shot transient (deltamode) behavior."""
+    try:
+        code = _gld_instance.trigger_transient()
+        return Response(success=True, result=int(code) if isinstance(code, int) else int(code.value))
+    except Exception as e:
+        return Response(success=False, error=str(e))
+
+
+def handle_exit_transient(message: Message) -> Response:
+    """Force exit from transient (deltamode) behavior."""
+    try:
+        code = _gld_instance.exit_transient()
+        return Response(success=True, result=int(code) if isinstance(code, int) else int(code.value))
+    except Exception as e:
+        return Response(success=False, error=str(e))
+
+
 def handle_save_checkpoint(message: Message) -> Response:
     """Save a checkpoint."""
     try:
@@ -323,7 +363,10 @@ def handle_get_objects_by_class(message: Message) -> Response:
 def handle_get_object_properties(message: Message) -> Response:
     """Get all properties of an object."""
     try:
-        result = _gld_instance.get_object_properties(message.args["object_name"])
+        object_name = message.args["object_name"]
+        result = _gld_instance.get_object_properties(object_name)
+        if bool(message.args.get("typed", False)) and isinstance(result, dict):
+            result = _convert_typed_property_map(object_name, result)
         return Response(success=True, result=result)
     except Exception as e:
         return Response(success=False, error=str(e))
@@ -333,6 +376,18 @@ def handle_get_all_objects(message: Message) -> Response:
     """Get all objects (and their properties) of a specific class."""
     try:
         result = _gld_instance.get_all_objects(message.args["class_name"])
+        if bool(message.args.get("typed", False)) and isinstance(result, list):
+            typed_objects = []
+            for obj_props in result:
+                if not isinstance(obj_props, dict):
+                    typed_objects.append(obj_props)
+                    continue
+                obj_name = obj_props.get("__name__") or obj_props.get("__id__")
+                if isinstance(obj_name, str) and obj_name:
+                    typed_objects.append(_convert_typed_property_map(obj_name, obj_props))
+                else:
+                    typed_objects.append(obj_props)
+            result = typed_objects
         return Response(success=True, result=result)
     except Exception as e:
         return Response(success=False, error=str(e))
@@ -342,6 +397,24 @@ def handle_get_model(message: Message) -> Response:
     """Get the entire model with all objects and properties organized by class."""
     try:
         result = _gld_instance.get_model()
+        if bool(message.args.get("typed", False)) and isinstance(result, dict):
+            typed_model = {}
+            for class_name, objects in result.items():
+                if not isinstance(objects, list):
+                    typed_model[class_name] = objects
+                    continue
+                typed_objects = []
+                for obj_props in objects:
+                    if not isinstance(obj_props, dict):
+                        typed_objects.append(obj_props)
+                        continue
+                    obj_name = obj_props.get("__name__") or obj_props.get("__id__")
+                    if isinstance(obj_name, str) and obj_name:
+                        typed_objects.append(_convert_typed_property_map(obj_name, obj_props))
+                    else:
+                        typed_objects.append(obj_props)
+                typed_model[class_name] = typed_objects
+            result = typed_model
         return Response(success=True, result=result)
     except Exception as e:
         return Response(success=False, error=str(e))
@@ -350,11 +423,40 @@ def handle_get_model(message: Message) -> Response:
 def handle_get_property(message: Message) -> Response:
     """Get a property value."""
     try:
+        object_name = message.args["object_name"]
+        property_name = message.args["property_name"]
+        typed = bool(message.args.get("typed", False))
         code, value = _gld_instance.get_property(
-            message.args["object_name"],
-            message.args["property_name"]
+            object_name,
+            property_name
         )
-        return Response(success=True, result={"code": int(code) if isinstance(code, int) else int(code.value), "value": value})
+        code_int = int(code) if isinstance(code, int) else int(code.value)
+
+        # Compatibility fallback for feeders where measured_real_power is not
+        # directly published on the requested object (e.g., substation).
+        # Many network-node/substation objects publish distribution_power*
+        # (complex VA) rather than measured_real_power (real W).
+        if code_int != 0 and property_name == "measured_real_power":
+            for alt_name in (
+                "measured_power",
+                "distribution_power",
+                "distribution_power_A",
+                "distribution_power_B",
+                "distribution_power_C",
+                "power",
+            ):
+                alt_code, alt_value = _gld_instance.get_property(object_name, alt_name)
+                alt_code_int = int(alt_code) if isinstance(alt_code, int) else int(alt_code.value)
+                if alt_code_int == 0:
+                    code_int = 0
+                    value = alt_value
+                    property_name = alt_name
+                    break
+
+        if typed and code_int == 0:
+            prop_type, unit = _get_prop_type_unit(object_name, property_name)
+            value = _convert_value(value, prop_type, unit)
+        return Response(success=True, result={"code": code_int, "value": value})
     except Exception as e:
         return Response(success=False, error=str(e))
 
@@ -404,6 +506,7 @@ _STR_TYPES   = {_PT_CHAR8, _PT_CHAR32, _PT_CHAR256, _PT_CHAR1024,
                 _PT_OBJECT, _PT_DELEGATED, _PT_ENUMERATION, _PT_SET}
 
 _PA_W = 0x02  # write access bit (from property.h)
+_META_KEYS = {"__class__", "__id__", "__name__"}
 
 _TYPE_NAMES = {
     _PT_VOID: "void",
@@ -481,6 +584,34 @@ def _convert_value(raw_value: str, prop_type: int, unit: str):
     except (ValueError, TypeError):
         # Fall back to the raw (unit-stripped) string
         return s
+
+
+def _get_prop_type_unit(obj_name: str, prop_name: str) -> tuple[int, str]:
+    """Get the property type/unit metadata for one object property."""
+    if not hasattr(_gld_instance, 'get_property_info'):
+        return _PT_VOID, ""
+
+    try:
+        code_info, info = _gld_instance.get_property_info(obj_name, prop_name)
+        info_int = int(code_info) if isinstance(code_info, int) else int(code_info.value)
+        if info_int == 0:
+            return info.get("type", _PT_VOID), info.get("unit", "")
+    except Exception:
+        pass
+
+    return _PT_VOID, ""
+
+
+def _convert_typed_property_map(obj_name: str, props: dict[str, str]) -> dict[str, Any]:
+    """Convert property map values to native Python types without units."""
+    result = {}
+    for prop_name, raw_value in props.items():
+        if prop_name in _META_KEYS:
+            result[prop_name] = raw_value
+            continue
+        prop_type, unit = _get_prop_type_unit(obj_name, prop_name)
+        result[prop_name] = _convert_value(raw_value, prop_type, unit)
+    return result
 
 
 def handle_get_object_property_value(message: Message) -> Response:
@@ -575,10 +706,31 @@ def handle_get_object_properties_detailed(message: Message) -> Response:
 def handle_set_property(message: Message) -> Response:
     """Set a property value."""
     try:
+        detailed = bool(message.args.get("detailed", False))
+        object_name = message.args["object_name"]
+        property_name = message.args["property_name"]
+        requested_value = message.args["value"]
+
+        if detailed:
+            details = _gld_instance.set_property_detailed(
+                object_name,
+                property_name,
+                requested_value,
+            )
+            return Response(
+                success=True,
+                result={
+                    "code": int(details.get("code", 0)),
+                    "normalized": bool(details.get("normalized", False)),
+                    "requested_value": str(details.get("requested_value", requested_value)),
+                    "applied_value": str(details.get("applied_value", requested_value)),
+                },
+            )
+
         code = _gld_instance.set_property(
-            message.args["object_name"],
-            message.args["property_name"],
-            message.args["value"]
+            object_name,
+            property_name,
+            requested_value,
         )
         return Response(success=True, result=int(code) if isinstance(code, int) else int(code.value))
     except Exception as e:
@@ -588,10 +740,27 @@ def handle_set_property(message: Message) -> Response:
 def handle_get_properties_by_class(message: Message) -> Response:
     """Get property values from all objects of a class."""
     try:
-        result = _gld_instance.get_properties_by_class(
-            message.args["class_name"],
-            message.args["property_name"]
-        )
+        class_name = message.args["class_name"]
+        property_name = message.args["property_name"]
+
+        # Some builds/classes don't expose "name" through the low-level
+        # class-property query path even though object metadata has __name__.
+        # Keep API behavior consistent by mapping each object name/ID to itself.
+        if property_name == "name":
+            object_names = _gld_instance.get_objects_by_class(class_name)
+            result = {obj_name: obj_name for obj_name in object_names}
+        else:
+            result = _gld_instance.get_properties_by_class(
+                class_name,
+                property_name
+            )
+
+        if bool(message.args.get("typed", False)) and isinstance(result, dict):
+            typed_result = {}
+            for obj_name, raw_value in result.items():
+                prop_type, unit = _get_prop_type_unit(obj_name, property_name)
+                typed_result[obj_name] = _convert_value(raw_value, prop_type, unit)
+            result = typed_result
         return Response(success=True, result=result)
     except Exception as e:
         return Response(success=False, error=str(e))
@@ -635,6 +804,12 @@ def handle_get_messages(message: Message) -> Response:
     """Get all captured warning/error/debug messages."""
     try:
         result = _gld_instance.get_messages()
+        if isinstance(result, list):
+            for entry in result:
+                if isinstance(entry, dict):
+                    timestamp = entry.get("timestamp")
+                    if isinstance(timestamp, str) and timestamp.strip():
+                        entry["timestamp"] = _to_iso8601(timestamp)
         return Response(success=True, result=result)
     except Exception as e:
         return Response(success=False, error=str(e))
@@ -695,6 +870,9 @@ COMMAND_HANDLERS = {
     Command.SET_TIME: handle_set_time,
     Command.GET_TIME: handle_get_time,
     Command.SET_TIME_STEP: handle_set_time_step,
+    Command.MAINTAIN_TRANSIENT: handle_maintain_transient,
+    Command.TRIGGER_TRANSIENT: handle_trigger_transient,
+    Command.EXIT_TRANSIENT: handle_exit_transient,
     Command.SAVE_CHECKPOINT: handle_save_checkpoint,
     Command.GET_CHECKPOINT_JSON: handle_get_checkpoint_json,
     Command.START: handle_start,
@@ -727,19 +905,9 @@ COMMAND_HANDLERS = {
 
 def main():
     """Main worker loop - reads commands from stdin, executes them, writes responses to stdout."""
-    # CRITICAL: Redirect C++ stdout to stderr to prevent GridLAB-D debug output
-    # from corrupting the JSON protocol on stdout
-    import os
-    # Duplicate stdout to a safe place, then redirect stdout fd to stderr
-    original_stdout_fd = os.dup(1)  # Save original stdout
-    os.dup2(2, 1)  # Redirect stdout (fd 1) to stderr (fd 2)
-    
-    # Create a Python file object from the saved stdout for protocol communication
-    protocol_out = os.fdopen(original_stdout_fd, 'w', buffering=1)
-    
     # Send READY signal to parent to indicate worker is ready to receive commands
-    protocol_out.write("READY\n")
-    protocol_out.flush()
+    sys.stdout.write("READY\n")
+    sys.stdout.flush()
     
     for line in sys.stdin:
         try:
@@ -751,16 +919,23 @@ def main():
             else:
                 response = handler(message)
             
-            protocol_out.write(response.to_json() + "\n")
-            protocol_out.flush()
+            sys.stdout.write(response.to_json() + "\n")
+            sys.stdout.flush()
             if message.command in (Command.EXIT_GLD, Command.FINALIZE):
                 break
         except Exception as e:
             response = Response(success=False, error=f"Worker error: {str(e)}")
-            protocol_out.write(response.to_json() + "\n")
-            protocol_out.flush()
+            sys.stdout.write(response.to_json() + "\n")
+            sys.stdout.flush()
 
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        sys.stderr.write(f"WORKER FATAL ERROR: {e}\n")
+        sys.stderr.write(traceback.format_exc())
+        sys.stderr.flush()
+        sys.exit(1)

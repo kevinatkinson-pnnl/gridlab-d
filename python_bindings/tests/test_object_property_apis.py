@@ -26,8 +26,8 @@ class TestSingleObjectSingleProperty:
         result, value = gld_with_model.get_property(houses[0], "floor_area")
         
         assert result == 0, f"Failed to get property: {result}"
-        assert isinstance(value, str)
-        assert value != ""
+        assert value is not None
+        assert not isinstance(value, (dict, list))
     
     def test_get_property_invalid_object(self, gld_with_model):
         """Get property from non-existent object."""
@@ -65,9 +65,12 @@ class TestSingleObjectAllProperties:
         property_keys = [k for k in props.keys() if k not in meta_keys]
         assert len(property_keys) > 0
         
-        # All values should be strings
-        for value in props.values():
-            assert isinstance(value, str)
+        # Metadata stays strings, property values should be scalar Python types
+        for key, value in props.items():
+            if key in {"__class__", "__id__", "__name__"}:
+                assert isinstance(value, str)
+            else:
+                assert not isinstance(value, (dict, list))
     
     def test_get_object_properties_by_id(self, gld_with_model):
         """Get all properties from an object by ID."""
@@ -88,6 +91,12 @@ class TestSingleObjectAllProperties:
 
 class TestAllObjectsNames:
     """Test get_objects_by_class() - just names/IDs."""
+
+    def test_get_object_names_by_class_matches_alias(self, gld_with_model):
+        """New API name should match legacy alias behavior."""
+        names_new = gld_with_model.get_object_names_by_class("house")
+        names_old = gld_with_model.get_objects_by_class("house")
+        assert names_new == names_old
     
     def test_get_objects_by_class(self, gld_with_model):
         """Get list of object names for a class."""
@@ -121,7 +130,7 @@ class TestAllObjectsSingleProperty:
         if props:
             for obj_name, value in props.items():
                 assert isinstance(obj_name, str)
-                assert isinstance(value, str)
+                assert not isinstance(value, (dict, list))
                 assert obj_name != ""
     
     def test_get_properties_by_class_count_matches(self, gld_with_model):
@@ -275,3 +284,56 @@ class TestEdgeCases:
         assert isinstance(all_objs, list)
         if all_objs:
             assert isinstance(all_objs[0], dict)
+
+
+class TestTypedPropertyValues:
+    """Typed property query options should return native values without units."""
+
+    def test_get_property_typed_returns_float(self, gld_with_model):
+        houses = gld_with_model.get_objects_by_class("house")
+        if not houses:
+            pytest.skip("No house objects in model")
+
+        code, value = gld_with_model.get_property(houses[0], "floor_area", typed=True)
+        assert code == 0
+        assert isinstance(value, float)
+
+    def test_get_properties_by_class_typed_returns_numeric_values(self, gld_with_model):
+        props = gld_with_model.get_properties_by_class("house", "floor_area", typed=True)
+        assert isinstance(props, dict)
+        if props:
+            for value in props.values():
+                assert isinstance(value, float)
+
+    def test_get_object_properties_typed_preserves_metadata(self, gld_with_model):
+        houses = gld_with_model.get_objects_by_class("house")
+        if not houses:
+            pytest.skip("No house objects in model")
+
+        props = gld_with_model.get_object_properties(houses[0], typed=True)
+        assert isinstance(props, dict)
+        assert isinstance(props.get("__class__"), str)
+        assert isinstance(props.get("__id__"), str)
+        if "floor_area" in props:
+            assert isinstance(props["floor_area"], float)
+
+    def test_get_all_objects_typed_returns_typed_properties(self, gld_with_model):
+        objects = gld_with_model.get_all_objects("house", typed=True)
+        assert isinstance(objects, list)
+        if objects:
+            first = objects[0]
+            assert isinstance(first.get("__class__"), str)
+            assert isinstance(first.get("__id__"), str)
+            if "floor_area" in first:
+                assert isinstance(first["floor_area"], float)
+
+    def test_get_model_typed_returns_typed_values(self, gld_with_model):
+        model = gld_with_model.get_model(typed=True)
+        assert isinstance(model, dict)
+        houses = model.get("house", [])
+        if houses:
+            first = houses[0]
+            assert isinstance(first.get("__class__"), str)
+            assert isinstance(first.get("__id__"), str)
+            if "floor_area" in first:
+                assert isinstance(first["floor_area"], float)

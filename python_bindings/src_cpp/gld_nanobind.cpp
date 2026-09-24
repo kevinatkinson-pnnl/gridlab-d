@@ -18,6 +18,7 @@ unsigned int object_get_count(void);
 char *global_getvar(const char *name, char *buffer, int size);
 int global_setvar(const char *def, ...);
 int convert_from_timestamp(int64_t ts, char *buffer, int size);
+int convert_from_deltatime_timestamp(double ts_v, char *buffer, int size);
 }
 
 #define NB_STRINGIFY_HELPER(x) #x
@@ -97,14 +98,16 @@ NB_MODULE(gridlabd_core, m) {
 
   nb::class_<GridLabD>(m, "GridLabD")
       .def(nb::init<>(), "Create a GridLAB-D runtime instance")
-      .def_static("set_install_root", &GridLabD::set_install_root,
+      .def_static("set_install_root", [](const std::string &path) {
+        GridLabD::set_install_root(path.c_str());
+      },
                   nb::arg("install_root"),
                   "Set the GridLAB-D installation root directory (should "
                   "contain share/ with tzinfo.txt)")
       .def_static("get_install_root", &GridLabD::get_install_root,
                   "Get the GridLAB-D installation root directory")
-      .def_static("get_executable_path", &GridLabD::get_executable_path,
-                  "Get the GridLAB-D executable path")
+//      .def_static("get_executable_path", &GridLabD::get_executable_path,
+//                   "Get the GridLAB-D executable path")
       .def("set_config_file", &GridLabD::set_config_file,
            nb::arg("config_file"), "Set the configuration file path")
       .def("set_working_directory", &GridLabD::set_working_directory,
@@ -136,8 +139,8 @@ NB_MODULE(gridlabd_core, m) {
             double simulation_time = 0.0;
             GLDErrorCode code = self.step(simulation_time);
             char buffer[64];
-            int64_t ts = static_cast<int64_t>(simulation_time);
-            if (convert_from_timestamp(ts, buffer, sizeof(buffer)) > 0) {
+                              if (convert_from_deltatime_timestamp(simulation_time, buffer,
+                                                                                                                        sizeof(buffer)) > 0) {
               return nb::make_tuple(code, std::string(buffer));
             }
             return nb::make_tuple(code, std::string("INVALID"));
@@ -155,14 +158,21 @@ NB_MODULE(gridlabd_core, m) {
           "Get the current simulation time")
       .def("set_time_step", &GridLabD::set_time_step, nb::arg("time_step"),
            "Set the simulation time step")
+      .def("maintain_transient", &GridLabD::maintain_transient,
+           nb::arg("enable"),
+           "Toggle global transient persistence via deltamode_forced_always")
+      .def("trigger_transient", &GridLabD::trigger_transient,
+           "Request one-shot transient entry on the next step opportunity")
+      .def("exit_transient", &GridLabD::exit_transient,
+           "Force exit transient mode back to QSTS (not recommended)")
       .def(
           "step_to",
           [](GridLabD &self, const std::string &target_time_str) {
             double simulation_time = 0.0;
             GLDErrorCode code = self.step_to(target_time_str, simulation_time);
             char buffer[64];
-            int64_t ts = static_cast<int64_t>(simulation_time);
-            if (convert_from_timestamp(ts, buffer, sizeof(buffer)) > 0) {
+                              if (convert_from_deltatime_timestamp(simulation_time, buffer,
+                                                                                                                        sizeof(buffer)) > 0) {
               return nb::make_tuple(code, std::string(buffer));
             }
             return nb::make_tuple(code, std::string("INVALID"));
@@ -245,9 +255,32 @@ NB_MODULE(gridlabd_core, m) {
           },
           nb::arg("object_name"), nb::arg("property_name"),
           "Get property metadata (type, unit, description, access flags)")
-      .def("set_property", &GridLabD::set_property, nb::arg("object_name"),
-           nb::arg("property_name"), nb::arg("value"),
-           "Set a property value on an object")
+               .def(
+                         "set_property",
+                         [](GridLabD &self, const std::string &object_name,
+                               const std::string &property_name, const std::string &value) {
+                              return self.set_property(object_name, property_name, value);
+                         },
+                         nb::arg("object_name"), nb::arg("property_name"), nb::arg("value"),
+                         "Set a property value on an object")
+               .def(
+                         "set_property_detailed",
+                         [](GridLabD &self, const std::string &object_name,
+                               const std::string &property_name, const std::string &value) {
+                              bool normalized = false;
+                              std::string applied_value;
+                              GLDErrorCode code = self.set_property(object_name, property_name,
+                                                                                                                             value, &normalized,
+                                                                                                                             &applied_value);
+                              nb::dict details;
+                              details["code"] = static_cast<int>(code);
+                              details["normalized"] = normalized;
+                              details["requested_value"] = value;
+                              details["applied_value"] = applied_value;
+                              return details;
+                         },
+                         nb::arg("object_name"), nb::arg("property_name"), nb::arg("value"),
+                         "Set a property value and return normalization details")
       .def("get_properties_by_class", &GridLabD::get_properties_by_class,
            nb::arg("class_name"), nb::arg("property_name"),
            "Get property values from all objects of a class")
@@ -258,7 +291,7 @@ NB_MODULE(gridlabd_core, m) {
           "get_checkpoint_json",
           [](GridLabD &self, const std::string &filepath) {
             nlohmann::json value = self.get_checkpoint_json(filepath);
-                              normalize_checkpoint_clock(value);
+            normalize_checkpoint_clock(value);
             return value.dump();
           },
           nb::arg("filepath") = std::string(),

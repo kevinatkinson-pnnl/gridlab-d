@@ -247,6 +247,7 @@ static struct s_varmap
 	{"deltamode_iteration_limit", PT_int32, &global_deltamode_iteration_limit, PA_PUBLIC, "iteration limit for each delta timestep (object and interupdate)"},
 	{"deltamode_forced_extra_timesteps", PT_int32, &global_deltamode_forced_extra_timesteps, PA_PUBLIC, "forced extra deltamode timesteps before returning to event-driven mode"},
 	{"deltamode_forced_always", PT_bool, &global_deltamode_forced_always, PA_PUBLIC, "forced deltamode for debugging -- prevents event-driven mode"},
+	{"api_delta_trigger_count", PT_int64, &global_api_delta_trigger_count, PA_PUBLIC, "count of API-triggered entries into deltamode branch"},
 	{"deltamode_preferred_module_order", PT_bool, &global_deltamode_force_preferred_order, PA_PUBLIC, "sets execution order for deltamode, as opposed to GLM order"},
 	{"run_powerworld", PT_bool, &global_run_powerworld, PA_PUBLIC, "boolean that that says your system is set up correctly to run with PowerWorld"},
 	{"bigranks", PT_bool, &global_bigranks, PA_PUBLIC, "enable fast/blind set_rank operations"},
@@ -699,7 +700,7 @@ char *global_guid(char *buffer, int size)
 			srand(entropy_source());
 			guid_first = 0;
 		}
-		sprintf(buffer, "%04x%04x-%04x-4%03x-%04x-%04x%04x%04x",
+		snprintf(buffer, size, "%04x%04x-%04x-4%03x-%04x-%04x%04x%04x",
 				rand() & 0xffff, rand() & 0xffff, rand() & 0xffff, rand() & 0x0fff, rand() & 0xffff, rand() & 0xffff, rand() & 0xffff, rand() & 0xffff);
 		return buffer;
 	}
@@ -909,7 +910,7 @@ int parameter_expansion(char *buffer, int size, const char *spec)
 		if (var == nullptr || var->prop->ptype != PT_int32)
 			return 0;
 		addr = (int32 *)&(var->prop->addr);
-		sprintf(buffer, "%d", ++(*addr));
+		snprintf(buffer, size, "%d", ++(*addr));
 		return 1;
 	}
 
@@ -921,7 +922,7 @@ int parameter_expansion(char *buffer, int size, const char *spec)
 		if (var == nullptr || var->prop->ptype != PT_int32)
 			return 0;
 		addr = (int32 *)&(var->prop->addr);
-		sprintf(buffer, "%d", --(*addr));
+		snprintf(buffer, size, "%d", --(*addr));
 		return 1;
 	}
 
@@ -933,7 +934,7 @@ int parameter_expansion(char *buffer, int size, const char *spec)
 		if (var == nullptr || var->prop->ptype != PT_int32)
 			return 0;
 		addr = (int32 *)&(var->prop->addr);
-		sprintf(buffer, "%d", (*addr));
+		snprintf(buffer, size, "%d", (*addr));
 		if (strcmp(op, "++") == 0)
 		{
 			(*addr)++;
@@ -1003,60 +1004,60 @@ int parameter_expansion(char *buffer, int size, const char *spec)
 		if (var != nullptr && var->prop->ptype == PT_int32)
 		{
 			int32 *addr = (int32 *)&(var->prop->addr);
-			sprintf(buffer, "%d", (*addr));
+			snprintf(buffer, size, "%d", (*addr));
 			if (strcmp(op, "+=") == 0)
 			{
-				sprintf(buffer, "%d", (*addr) += number);
+				snprintf(buffer, size, "%d", (*addr) += number);
 				return 1;
 			}
 			if (strcmp(op, "-=") == 0)
 			{
-				sprintf(buffer, "%d", (*addr) -= number);
+				snprintf(buffer, size, "%d", (*addr) -= number);
 				return 1;
 			}
 			if (strcmp(op, "*=") == 0)
 			{
-				sprintf(buffer, "%d", (*addr) *= number);
+				snprintf(buffer, size, "%d", (*addr) *= number);
 				return 1;
 			}
 			if (strcmp(op, "/=") == 0)
 			{
-				sprintf(buffer, "%d", (*addr) /= number);
+				snprintf(buffer, size, "%d", (*addr) /= number);
 				return 1;
 			}
 			if (strcmp(op, "%=") == 0)
 			{
-				sprintf(buffer, "%d", (*addr) %= number);
+				snprintf(buffer, size, "%d", (*addr) %= number);
 				return 1;
 			}
 			if (strcmp(op, "&=") == 0)
 			{
-				sprintf(buffer, "%d", (*addr) &= number);
+				snprintf(buffer, size, "%d", (*addr) &= number);
 				return 1;
 			}
 			if (strcmp(op, "|=") == 0)
 			{
-				sprintf(buffer, "%d", (*addr) |= number);
+				snprintf(buffer, size, "%d", (*addr) |= number);
 				return 1;
 			}
 			if (strcmp(op, "^=") == 0)
 			{
-				sprintf(buffer, "%d", (*addr) ^= number);
+				snprintf(buffer, size, "%d", (*addr) ^= number);
 				return 1;
 			}
 			if (strcmp(op, "&=~") == 0)
 			{
-				sprintf(buffer, "%d", (*addr) &= ~number);
+				snprintf(buffer, size, "%d", (*addr) &= ~number);
 				return 1;
 			}
 			if (strcmp(op, "|=~") == 0)
 			{
-				sprintf(buffer, "%d", (*addr) |= ~number);
+				snprintf(buffer, size, "%d", (*addr) |= ~number);
 				return 1;
 			}
 			if (strcmp(op, "^=~") == 0)
 			{
-				sprintf(buffer, "%d", (*addr) ^= ~number);
+				snprintf(buffer, size, "%d", (*addr) ^= ~number);
 				return 1;
 			}
 		}
@@ -1075,7 +1076,7 @@ int parameter_expansion(char *buffer, int size, const char *spec)
 		else
 			addr = (int32 *)&(var->prop->addr);
 		*addr = number;
-		sprintf(buffer, "%d", number);
+		snprintf(buffer, size, "%d", number);
 		return 1;
 	}
 

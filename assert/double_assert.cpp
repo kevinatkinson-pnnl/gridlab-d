@@ -18,12 +18,11 @@ EXPORT_INIT(double_assert);
 EXPORT_COMMIT(double_assert);
 
 CLASS *double_assert::oclass = nullptr;
-// double_assert *double_assert::defaults = nullptr;
-static double_assert defaults_storage; // POD storage for defaults
-double_assert *double_assert::defaults = &defaults_storage;
+double_assert *double_assert::defaults = nullptr;
 
 double_assert::double_assert(MODULE *module)
 {
+    defaults = this;
     if (oclass == nullptr)
     {
         // register to receive notice for first top down. bottom up, and second top
@@ -55,41 +54,30 @@ double_assert::double_assert(MODULE *module)
                                 nullptr) < 1)
         {
             char msg[256];
-            sprintf(msg, "unable to publish properties in %s", __FILE__);
+      snprintf(msg, sizeof(msg), "unable to publish properties in %s", __FILE__);
             throw msg;
         }
 
-        // defaults = this;
         status = ASSERT_TRUE;
         within = 0.0;
         within_mode = IN_ABS;
         value = 0.0;
         once = ONCE_FALSE;
         once_value = 0;
-        target.erase();
+        std::memset(target, 0, sizeof(target));
     }
 }
 
 /* Object creation is called once for each object that is created by the core */
 int double_assert::create(void)
 {
-    // memcpy(this, defaults, sizeof(*this));
     status = defaults->status;
     within = defaults->within;
     within_mode = defaults->within_mode;
     value = defaults->value;
     once = defaults->once;
     once_value = defaults->once_value;
-
-    // Make sure target is a clean string
-    if (defaults->target[0] != '\0')
-        target.copy_from(defaults->target);
-
-    gl_output("double_assert defaults: status=%d value=%g within=%g "
-              "within_mode=%d once=%d target='%s' once_value=%g",
-              static_cast<int>(status), value, within,
-              static_cast<int>(within_mode), static_cast<int>(once),
-              target.get_string(), once_value);
+    std::memcpy(target, defaults->target, sizeof(target));
 
     return 1; /* return 1 on success, 0 on failure */
 }
@@ -317,29 +305,28 @@ EXPORT SIMULATIONMODE update_double_assert(OBJECT *obj, TIMESTAMP t0,
 
                     // Output date appropriately
                     if (strcmp(dateformat, "ISO") == 0)
-                        sprintf(datebuff,
+            snprintf(datebuff, sizeof(datebuff),
                                 "ERROR    [%04d-%02d-%02d %02d:%02d:%02d.%.06d %s] : ",
                                 delta_dt_val.year, delta_dt_val.month, delta_dt_val.day,
                                 delta_dt_val.hour, delta_dt_val.minute, delta_dt_val.second,
                                 del_microseconds, delta_dt_val.tz);
                     else if (strcmp(dateformat, "US") == 0)
-                        sprintf(datebuff,
+            snprintf(datebuff, sizeof(datebuff),
                                 "ERROR    [%02d-%02d-%04d %02d:%02d:%02d.%.06d %s] : ",
                                 delta_dt_val.month, delta_dt_val.day, delta_dt_val.year,
                                 delta_dt_val.hour, delta_dt_val.minute, delta_dt_val.second,
                                 del_microseconds, delta_dt_val.tz);
                     else if (strcmp(dateformat, "EURO") == 0)
-                        sprintf(datebuff,
+            snprintf(datebuff, sizeof(datebuff),
                                 "ERROR    [%02d-%02d-%04d %02d:%02d:%02d.%.06d %s] : ",
                                 delta_dt_val.day, delta_dt_val.month, delta_dt_val.year,
                                 delta_dt_val.hour, delta_dt_val.minute, delta_dt_val.second,
                                 del_microseconds, delta_dt_val.tz);
                     else
-                        sprintf(datebuff, "ERROR    %.09lf : ", del_clock);
+            snprintf(datebuff, sizeof(datebuff), "ERROR    %.09lf : ", del_clock);
 
                     // Actual error part
-                    sprintf(
-                        error_output_buff,
+          snprintf(error_output_buff, sizeof(error_output_buff),
                         "Assert failed on %s - %s (%g) not within %f of given value %g",
                         gl_name(obj->parent, buff, 64), da->get_target().c_str(), *x,
                         da->get_within(), da->get_value());
@@ -379,29 +366,28 @@ EXPORT SIMULATIONMODE update_double_assert(OBJECT *obj, TIMESTAMP t0,
 
                     // Output date appropriately
                     if (strcmp(dateformat, "ISO") == 0)
-                        sprintf(datebuff,
+            snprintf(datebuff, sizeof(datebuff),
                                 "ERROR    [%04d-%02d-%02d %02d:%02d:%02d.%.06d %s] : ",
                                 delta_dt_val.year, delta_dt_val.month, delta_dt_val.day,
                                 delta_dt_val.hour, delta_dt_val.minute, delta_dt_val.second,
                                 del_microseconds, delta_dt_val.tz);
                     else if (strcmp(dateformat, "US") == 0)
-                        sprintf(datebuff,
+            snprintf(datebuff, sizeof(datebuff),
                                 "ERROR    [%02d-%02d-%04d %02d:%02d:%02d.%.06d %s] : ",
                                 delta_dt_val.month, delta_dt_val.day, delta_dt_val.year,
                                 delta_dt_val.hour, delta_dt_val.minute, delta_dt_val.second,
                                 del_microseconds, delta_dt_val.tz);
                     else if (strcmp(dateformat, "EURO") == 0)
-                        sprintf(datebuff,
+            snprintf(datebuff, sizeof(datebuff),
                                 "ERROR    [%02d-%02d-%04d %02d:%02d:%02d.%.06d %s] : ",
                                 delta_dt_val.day, delta_dt_val.month, delta_dt_val.year,
                                 delta_dt_val.hour, delta_dt_val.minute, delta_dt_val.second,
                                 del_microseconds, delta_dt_val.tz);
                     else
-                        sprintf(datebuff, "ERROR    %.09lf : ", del_clock);
+            snprintf(datebuff, sizeof(datebuff), "ERROR    %.09lf : ", del_clock);
 
                     // Actual error part
-                    sprintf(
-                        error_output_buff,
+          snprintf(error_output_buff, sizeof(error_output_buff),
                         "Assert failed on %s - %s (%g) not within %f of given value %g",
                         gl_name(obj->parent, buff, 64), da->get_target().c_str(), *x,
                         da->get_within(), da->get_value());

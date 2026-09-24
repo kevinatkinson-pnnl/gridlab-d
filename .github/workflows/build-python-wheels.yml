@@ -3,11 +3,13 @@ name: Build Python Wheels
 on:
   push:
     branches:
+      - master
       - main
       - develop
       - feature/1478
   pull_request:
     branches:
+      - master
       - main
   workflow_dispatch:
     inputs:
@@ -16,6 +18,11 @@ on:
         type: choice
         default: all
         options: [all, unix]
+      publish:
+        description: Package index to publish to after all wheel tests pass
+        type: choice
+        default: none
+        options: [none, testpypi, pypi]
 
 jobs:
   build_wheels:
@@ -156,7 +163,9 @@ jobs:
     environment: testpypi
     permissions:
       id-token: write
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/feature/1478')
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.publish == 'testpypi') ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/feature/1478'))
     
     steps:
       - uses: actions/download-artifact@v4
@@ -170,6 +179,7 @@ jobs:
         with:
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true
+          print-hash: true
 
   upload_pypi:
     name: Upload to PyPI
@@ -178,7 +188,10 @@ jobs:
     environment: pypi
     permissions:
       id-token: write
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.publish == 'pypi' &&
+      (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')) ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
 
     steps:
       - uses: actions/download-artifact@v4
@@ -189,3 +202,5 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          print-hash: true

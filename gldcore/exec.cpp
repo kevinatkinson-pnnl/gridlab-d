@@ -827,11 +827,19 @@ nlohmann::ordered_json do_checkpoint(const char *output_filename)
                                     std::string realPartStr = "";
                                     std::string imagPartStr = "";
                                     if (std::isnan(realPart) || std::fpclassify(realPart) != FP_SUBNORMAL)
-                                        realPartStr = std::format("{:+}", realPart);
+                                    {
+                                        char value[32];
+                                        snprintf(value, sizeof(value), "%+.17g", realPart);
+                                        realPartStr = value;
+                                    }
                                     else if (std::fpclassify(realPart) == FP_SUBNORMAL)
                                         realPartStr = "+0.0";
                                     if (std::isnan(imagPart) || std::fpclassify(imagPart) != FP_SUBNORMAL)
-                                        imagPartStr = std::format("{:+}j", imagPart);
+                                    {
+                                        char value[32];
+                                        snprintf(value, sizeof(value), "%+.17gj", imagPart);
+                                        imagPartStr = value;
+                                    }
                                     else if (std::fpclassify(imagPart) == FP_SUBNORMAL)
                                         imagPartStr = "+0.0j";
                                     std::string complexStr = realPartStr + imagPartStr;

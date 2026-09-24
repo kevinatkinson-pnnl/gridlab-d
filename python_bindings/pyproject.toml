@@ -32,7 +32,7 @@ Documentation = "https://gridlab-d.shoutwiki.com/wiki/Main_Page"
 [tool.scikit-build]
 # Split mode targets the CPython 3.10 stable ABI.
 wheel.py-api = "cp310"
-wheel.expand-macos-universal-tags = true
+wheel.expand-macos-universal-tags = false
 cmake.version = ">=3.26"
 cmake.build-type = "Release"
 wheel.packages = ["src/gridlabd"]
@@ -53,19 +53,21 @@ build = ["cp310-*"]
 skip = ["*-win32", "*-manylinux_i686", "*-musllinux_*"]
 
 # Test command to verify the wheel works
-test-command = "python -c 'import gridlabd; print(gridlabd.version()); print(gridlabd.hello())'"
+test-command = 'python -c "import gridlabd; print(gridlabd.version()); print(gridlabd.hello())"'
 
 [tool.cibuildwheel.linux]
+archs = ["x86_64"]
 # Install build dependencies
-before-all = "python -m pip install cmake patchelf && cmake -S {project}/.. -B {project}/../build -DCMAKE_BUILD_TYPE=Release && cmake --build {project}/../build --parallel 4"
+before-all = "/opt/python/cp310-cp310/bin/python -m pip install cmake patchelf && /opt/python/cp310-cp310/bin/cmake -S {project} -B {project}/build -DCMAKE_BUILD_TYPE=Release && /opt/python/cp310-cp310/bin/cmake --build {project}/build --parallel 4"
 
-# Use manylinux_2_28 (compatible with Ubuntu 20.04+, glibc 2.28+)
+# Build against glibc 2.28 to match the nanobind-backend Linux compatibility floor.
 manylinux-x86_64-image = "manylinux_2_28"
-manylinux-aarch64-image = "manylinux_2_28"
+repair-wheel-command = "auditwheel repair --plat manylinux_2_28_x86_64 --only-plat -w {dest_dir} {wheel}"
 
 [tool.cibuildwheel.macos]
+archs = ["universal2"]
 # Install CMake on macOS
-before-all = "brew install cmake && cmake -S {project}/.. -B {project}/../build -DCMAKE_BUILD_TYPE=Release && cmake --build {project}/../build --parallel 4"
+before-all = "python -m pip install cmake && cmake -S {project} -B {project}/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES='x86_64;arm64' -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 && cmake --build {project}/build --parallel 4"
 
 # Target macOS 11.0+ (Big Sur and later)
 environment = { MACOSX_DEPLOYMENT_TARGET = "11.0" }

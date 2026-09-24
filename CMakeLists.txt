@@ -519,7 +519,7 @@ add_subdirectory(gldcore)
 
 # Add test_gldapi executable
 add_executable(test_gldapi gldcore/test_gldapi.cpp)
-target_link_libraries(test_gldapi PRIVATE gldapi ${DL_LIB} ${JSONCPP_LIB} ${SUPERLU_LIB} Threads::Threads)
+target_link_libraries(test_gldapi PRIVATE gldapi ${CMAKE_DL_LIBS} ${JSONCPP_LIB} ${SUPERLU_LIB} Threads::Threads)
 add_dependencies(test_gldapi gldapi)  
 
 
@@ -687,4 +687,3 @@ set(CPACK_SET_DESTDIR ON)
 set(CMAKE_SKIP_INSTALL_ALL_DEPENDENCY ON)
 
 include(cmake/CPackConfig.cmake)
-

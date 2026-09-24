@@ -1,5 +1,9 @@
 #include "loader.h"
+#include <iomanip>
+#include <limits>
+#include <locale>
 #include <regex>
+#include <sstream>
 #include <unordered_set>
 
 unsigned int64 loader::polynomialHasher(string key)
@@ -47,16 +51,17 @@ STATUS loader::convert(ojson value, string &out)
 {
     if (value.is_number_float())
     {
-        char buf[64]{};
         double dblvalue = value.get<double>();
-        to_chars_result res = to_chars(buf, buf + sizeof(buf), dblvalue);
-        if (res.ec == errc::value_too_large)
+        std::ostringstream stream;
+        stream.imbue(std::locale::classic());
+        stream << std::setprecision(std::numeric_limits<double>::max_digits10) << dblvalue;
+        if (!stream)
         {
-            output_error("loader::convert() parsing file, %s: double value too large to convert to string: %f",
+            output_error("loader::convert() parsing file, %s: unable to convert double value to string: %f",
                          this->filename.string().c_str(), dblvalue);
             return FAILED;
         }
-        out = string(buf);
+        out = stream.str();
         return SUCCESS;
     }
     else if (value.is_number_integer())

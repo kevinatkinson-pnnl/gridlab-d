@@ -20,7 +20,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <format>
 #include <sys/stat.h>
 #include <chrono>
 #include <thread>
@@ -1111,21 +1110,13 @@ static counters run_test(char *file, double *elapsed_time = nullptr)
 #endif
 
     // 2. Prepare arguments.
-    // Ensure 'dir', 'validate_cmdargs', and 'name' are compatible with std::format.
-    // If they are char*, std::format will handle them as std::string_view.
-    // If they are std::string, that's fine too.
-
-    // 3. Construct the full command string using std::format.
-    // This is type-safe and handles memory automatically.
-    // We explicitly quote the executable path to handle spaces in paths correctly.
-
-    std::string command_line = std::format(
-        "\"{}\" -W {} {} {}{}",
-        executable_to_run_path.string(), // Get string representation for formatting
-        dir,
-        validate_child_cmdargs,
-        name,
-        fileExtension);
+    // Construct the full command string for diagnostics. The subprocess itself
+    // is launched with an argument vector below, so no shell escaping is needed.
+    std::ostringstream command_line_stream;
+    command_line_stream << '"' << executable_to_run_path.string() << "\" -W "
+                        << dir << ' ' << validate_child_cmdargs << ' '
+                        << name << fileExtension;
+    std::string command_line = command_line_stream.str();
 
     // 4. Execute the command using your custom vsystem wrapper.
     // Assuming vsystem expects a C-style string (const char*).
@@ -1160,7 +1151,7 @@ static counters run_test(char *file, double *elapsed_time = nullptr)
         while (ss >> token)
             test_args.push_back(token);
 
-        test_args.push_back(std::format("{}{}", name, fileExtension));
+        test_args.push_back(std::string(name) + fileExtension);
 
         std::string out_path = std::string(dir) + "/gridlabd.out.pipe";
         std::string err_path = std::string(dir) + "/gridlabd.err.pipe";
@@ -1193,7 +1184,7 @@ static counters run_test(char *file, double *elapsed_time = nullptr)
         }
 
         // Finally, add the model file itself
-        test_args.push_back(std::format("{}{}", name, fileExtension));
+        test_args.push_back(std::string(name) + fileExtension);
 
         std::string full_cmd_for_debug;
         for (const auto &arg : test_args)

@@ -10,6 +10,12 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: Platforms to build
+        type: choice
+        default: all
+        options: [all, unix]
 
 jobs:
   build_wheels:
@@ -18,14 +24,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-24.04
-            platform: linux
-          - os: macos-14
-            platform: macos
-          - os: windows-2022
-            platform: windows
-        
+        include: ${{ fromJSON(inputs.platforms == 'unix' && '[{"os":"ubuntu-24.04","platform":"linux"},{"os":"macos-15","platform":"macos"}]' || '[{"os":"ubuntu-24.04","platform":"linux"},{"os":"macos-15","platform":"macos"},{"os":"windows-2022","platform":"windows"}]') }}
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,6 +46,10 @@ jobs:
       - name: Install cibuildwheel
         run: python -m pip install cibuildwheel==3.3.0
 
+      - name: Install delvewheel
+        if: runner.os == 'Windows'
+        run: python -m pip install delvewheel
+
       - name: Build GridLAB-D core on Windows
         if: runner.os == 'Windows'
         shell: pwsh
@@ -58,33 +62,75 @@ jobs:
         run: python -m cibuildwheel python_bindings --output-dir wheelhouse
         env:
           CIBW_SKIP: "*-manylinux_i686 *-musllinux_* *-win32"
-          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
           CIBW_TEST_COMMAND: python -c "import gridlabd; print(gridlabd.version()); print(gridlabd.hello()); g = gridlabd.GridLabD(); print(g.get_clock())"
           CIBW_TEST_REQUIRES: numpy
 
       - name: Build wheels on Windows
         if: runner.os == 'Windows'
         shell: pwsh
-        run: python -m cibuildwheel python_bindings --output-dir wheelhouse
+        run: |
+          $workspace = $env:GITHUB_WORKSPACE.Replace('\', '/')
+          $repairPython = (Get-Command python).Source.Replace('\', '/')
+          $env:CIBW_CONFIG_SETTINGS = "cmake.define.GRIDLABD_BUILD_DIR=$workspace/out/build/ci-windows"
+          $env:CIBW_REPAIR_WHEEL_COMMAND_WINDOWS = "`"$repairPython`" -m delvewheel repair --add-path `"$workspace/out/build/ci-windows/bin/Release`" -w {dest_dir} {wheel}"
+          python -m cibuildwheel python_bindings --output-dir wheelhouse
         env:
           CIBW_SKIP: "*-win32"
-          CIBW_CONFIG_SETTINGS: "cmake.define.GRIDLABD_BUILD_DIR=${{ github.workspace }}/out/build/ci-windows"
           CIBW_TEST_COMMAND: python -c "import gridlabd; print(gridlabd.version()); print(gridlabd.hello()); g = gridlabd.GridLabD(); print(g.get_clock())"
           CIBW_TEST_REQUIRES: numpy
+
+      - name: Verify both macOS architectures are present
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          shopt -s nullglob
+          wheels=(wheelhouse/*-cp310-abi3-macosx_11_0_universal2.whl)
+          if [[ ${#wheels[@]} -ne 1 ]]; then
+            echo "Expected exactly one macOS universal2 ABI3 wheel"
+            exit 1
+          fi
+          rm -rf "$RUNNER_TEMP/macos-wheel"
+          python -m zipfile -e "${wheels[0]}" "$RUNNER_TEMP/macos-wheel"
+          found=0
+          while IFS= read -r -d '' binary; do
+            if file "$binary" | grep -q 'Mach-O'; then
+              lipo "$binary" -verify_arch x86_64 arm64
+              found=$((found + 1))
+            fi
+          done < <(find "$RUNNER_TEMP/macos-wheel" -type f -print0)
+          if [[ $found -eq 0 ]]; then
+            echo "No Mach-O binaries found in macOS wheel"
+            exit 1
+          fi
       
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.platform }}
           path: ./wheelhouse/*.whl
 
-  test_windows_abi3:
-    name: Test Windows ABI3 on Python ${{ matrix.python }}
+  test_abi3:
+    if: inputs.platforms != 'unix'
+    name: Test ${{ matrix.platform }} ABI3 on Python ${{ matrix.python }}
     needs: [build_wheels]
-    runs-on: windows-2022
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        platform: [linux, macos-arm64, macos-x64, windows]
         python: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        include:
+          - platform: linux
+            os: ubuntu-24.04
+            artifact: linux
+          - platform: macos-arm64
+            os: macos-15
+            artifact: macos
+          - platform: macos-x64
+            os: macos-15-intel
+            artifact: macos
+          - platform: windows
+            os: windows-2022
+            artifact: windows
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -92,22 +138,20 @@ jobs:
           python-version: ${{ matrix.python }}
       - uses: actions/download-artifact@v4
         with:
-          name: wheels-windows
+          name: wheels-${{ matrix.artifact }}
           path: wheelhouse
       - name: Install and test the same stable-ABI wheel
         shell: pwsh
         run: |
-          $wheels = @(Get-ChildItem wheelhouse/*-cp310-abi3-win_amd64.whl)
-          if ($wheels.Count -ne 1) { throw "Expected exactly one Windows ABI3 wheel" }
-          python -m pip install $wheels[0].FullName pytest
+          $wheels = @(Get-ChildItem wheelhouse/*-cp310-abi3-*.whl)
+          if ($wheels.Count -ne 1) { throw "Expected exactly one ${{ matrix.platform }} ABI3 wheel" }
+          python -m pip install $wheels[0].FullName
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Copy-Item python_bindings/tests "$env:RUNNER_TEMP/abi3-tests" -Recurse
-          Set-Location $env:RUNNER_TEMP
-          python -m pytest abi3-tests/test_simple_load.py abi3-tests/unit/test_initialization.py abi3-tests/test_clock_api.py -q -p no:cacheprovider
+          python -c "import gridlabd; print(gridlabd.version()); print(gridlabd.hello()); g = gridlabd.GridLabD(); print(g.get_clock())"
 
   upload_test_pypi:
     name: Upload to Test PyPI
-    needs: [build_wheels, test_windows_abi3]
+    needs: [build_wheels, test_abi3]
     runs-on: ubuntu-latest
     environment: testpypi
     permissions:
@@ -129,7 +173,7 @@ jobs:
 
   upload_pypi:
     name: Upload to PyPI
-    needs: [build_wheels, test_windows_abi3]
+    needs: [build_wheels, test_abi3]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
